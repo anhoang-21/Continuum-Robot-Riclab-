@@ -44,6 +44,7 @@ tensorboard --logdir logs
 
 :: 4. watch / evaluate
 %ISAAC% play_vertical_pipe.py                               :: Isaac Sim window, rig then random pipe
+%ISAAC% play_vertical_pipe.py --num_envs 10                 :: 10 robots at once (even: rig, odd: random)
 %ISAAC% play_vertical_pipe.py --headless --episodes 100     :: success statistics
 %ISAAC% play_vertical_pipe.py --video --episodes 5          :: MP4 with HUD in videos\
 
