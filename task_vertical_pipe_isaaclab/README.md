@@ -5,6 +5,13 @@ and feeds down through a vertical pipe) to Isaac Sim 5.1 / Isaac Lab 2.3.2, trai
 Observation, action, reward, termination, reset / randomization, `dt` and `frame_skip` are the
 ones of the MuJoCo env; the PPO update and hyperparameters are the ones of its SB3 trainer.
 
+![10 robots in Isaac Sim](media/isaac_10_robots.png)
+
+![Two-panel view](media/isaac_two_panel.png)
+
+Videos (policy trained in MuJoCo, run in Isaac Sim): [12 random pipes, two-panel view](media/isaac_vertical_pipe_random_wide.mp4)
+(12/12 success) and [10 robots at once](media/isaac_10_robots.mp4) (20/20 success).
+
 | file | content |
 |---|---|
 | `constants.py` | task constants, copied 1:1 from `vertical_pipe_env.py` / `continuum_algorithm.py` |
@@ -16,6 +23,7 @@ ones of the MuJoCo env; the PPO update and hyperparameters are the ones of its S
 | `ppo_sb3.py`, `agent_cfg.py`, `pipe_runner.py` | rsl_rl PPO with the SB3 update rule, config, runner with eval / checkpoints |
 | `train_vertical_pipe.py`, `play_vertical_pipe.py` | training / viewer, statistics, video |
 | `import_sb3_policy.py` | SB3 model of the MuJoCo trainer (`.zip`) -> rsl_rl checkpoint (same networks) |
+| `record_video.py` | two-panel MP4 (fixed wide view + close-up of the pipe entrance, HUD, guides) like the MuJoCo demo |
 | `tests/compare_with_mujoco.py` | checks against the MuJoCo env (runs in the MuJoCo venv) |
 | `tests/check_isaac_env.py` | checks of the Isaac env, replay of MuJoCo trajectories in PhysX |
 | `assets/mjcf/ContinuumRobot_Native.xml` | source MJCF (copy of `urdf/ContinuumRobot_Native.xml`) |
@@ -47,6 +55,8 @@ tensorboard --logdir logs
 %ISAAC% play_vertical_pipe.py --num_envs 10                 :: 10 robots at once (even: rig, odd: random)
 %ISAAC% play_vertical_pipe.py --headless --episodes 100     :: success statistics
 %ISAAC% play_vertical_pipe.py --video --episodes 5          :: MP4 with HUD in videos\
+%ISAAC% record_video.py                                     :: two-panel MP4 like the MuJoCo demo --fixed-camera
+                                                            :: (12 random pipes, same scenes as the MuJoCo video)
 
 :: the policy trained in MuJoCo, in Isaac Sim (or as a start for --resume)
 %ISAAC% import_sb3_policy.py D:\mujoco\Continuum_MuJoCo\task_vertical_pipe\models\ppo_vpipe_wide\final_model.zip models\mujoco_ppo_vpipe_wide\model.pt
