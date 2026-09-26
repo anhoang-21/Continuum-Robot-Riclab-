@@ -1,0 +1,232 @@
+<mujoco model="ContinuumRobot_K22_URDF_V12">
+  <compiler angle="radian"/>
+
+  <asset>
+    <mesh name="base_link" content_type="model/obj" file="base_link.obj"/>
+    <mesh name="Elevator_Link" content_type="model/obj" file="Elevator_Link.obj"/>
+    <mesh name="Base_Arm" content_type="model/obj" file="Base_Arm.obj"/>
+    <mesh name="Dummy_Link1" content_type="model/obj" file="Dummy_Link1.obj"/>
+    <mesh name="Seg1" content_type="model/obj" file="Seg1.obj"/>
+    <mesh name="Dummy_Link2" content_type="model/obj" file="Dummy_Link2.obj"/>
+    <mesh name="Seg2" content_type="model/obj" file="Seg2.obj"/>
+    <mesh name="Dummy_Link3" content_type="model/obj" file="Dummy_Link3.obj"/>
+    <mesh name="Seg3" content_type="model/obj" file="Seg3.obj"/>
+    <mesh name="Dummy_Link4" content_type="model/obj" file="Dummy_Link4.obj"/>
+    <mesh name="Seg4" content_type="model/obj" file="Seg4.obj"/>
+    <mesh name="Dummy_Link5" content_type="model/obj" file="Dummy_Link5.obj"/>
+    <mesh name="Seg5" content_type="model/obj" file="Seg5.obj"/>
+    <mesh name="Dummy_Link6" content_type="model/obj" file="Dummy_Link6.obj"/>
+    <mesh name="Seg6" content_type="model/obj" file="Seg6.obj"/>
+    <mesh name="Dummy_Link7" content_type="model/obj" file="Dummy_Link7.obj"/>
+    <mesh name="Seg7" content_type="model/obj" file="Seg7.obj"/>
+    <mesh name="Dummy_Link8" content_type="model/obj" file="Dummy_Link8.obj"/>
+    <mesh name="Seg8" content_type="model/obj" file="Seg8.obj"/>
+    <mesh name="Dummy_Link9" content_type="model/obj" file="Dummy_Link9.obj"/>
+    <mesh name="Seg9" content_type="model/obj" file="Seg9.obj"/>
+    <mesh name="Dummy_Link10" content_type="model/obj" file="Dummy_Link10.obj"/>
+    <mesh name="Seg10" content_type="model/obj" file="Seg10.obj"/>
+    <mesh name="Dummy_Link11" content_type="model/obj" file="Dummy_Link11.obj"/>
+    <mesh name="Seg11" content_type="model/obj" file="Seg11.obj"/>
+    <mesh name="Dummy_Link12" content_type="model/obj" file="Dummy_Link12.obj"/>
+    <mesh name="Seg12" content_type="model/obj" file="Seg12.obj"/>
+    <mesh name="Dummy_Link13" content_type="model/obj" file="Dummy_Link13.obj"/>
+    <mesh name="Seg13" content_type="model/obj" file="Seg13.obj"/>
+    <mesh name="Dummy_Link14" content_type="model/obj" file="Dummy_Link14.obj"/>
+    <mesh name="Seg14" content_type="model/obj" file="Seg14.obj"/>
+    <mesh name="Dummy_Link15" content_type="model/obj" file="Dummy_Link15.obj"/>
+    <mesh name="Seg15" content_type="model/obj" file="Seg15.obj"/>
+  </asset>
+
+  <worldbody>
+    <geom pos="0 0 0.95" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.75294 0.75294 0.75294 1" mesh="base_link"/>
+    <geom pos="0 0 0.95" type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="base_link"/>
+    <body name="Elevator_Link" pos="0.13184 -0.13903 1.18737" quat="-2.59734e-06 0.707105 0.707108 -2.59735e-06">
+      <inertial pos="0.13925 -0.0704249 0.0811519" quat="-0.128689 0.698158 0.126708 0.692791" mass="12" diaginertia="0.375801 0.369323 0.023678"/>
+      <joint name="Elevator_Joint" pos="0 0 0" axis="0 0 -1" type="slide" range="-0.21112 0.112" actuatorfrcrange="-10000000 10000000"/>
+      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.79216 0.81961 0.93333 1" mesh="Elevator_Link"/>
+      <geom type="mesh" rgba="0.79216 0.81961 0.93333 1" mesh="Elevator_Link"/>
+      <geom pos="0.3295 -0.0015 0.11625" quat="0.709435 0 0 0.704771" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.75294 0.75294 0.75294 1" mesh="Base_Arm"/>
+      <geom pos="0.3295 -0.0015 0.11625" quat="0.709435 0 0 0.704771" type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="Base_Arm"/>
+      <body name="Dummy_Link1" pos="0.329489 -0.00151141 0.13125" quat="0.70802 0 0 0.706193">
+        <inertial pos="2.3822e-10 -1.1443e-05 0" quat="0.5 0.5 0.5 0.5" mass="0.0001978" diaginertia="1.2566e-09 1.2051e-09 1.0728e-09"/>
+        <joint name="Seg1_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.79216 0.81961 0.93333 1" mesh="Dummy_Link1"/>
+        <geom type="mesh" rgba="0.79216 0.81961 0.93333 1" mesh="Dummy_Link1"/>
+        <body name="Seg1" quat="0.707105 0 0 -0.707108">
+          <inertial pos="1.13265e-05 1.13203e-05 0.0190104" quat="0 0.707107 0 0.707107" mass="0.0517894" diaginertia="4.89434e-05 2.463e-05 2.46299e-05"/>
+          <joint name="Seg1_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg1"/>
+          <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg1"/>
+          <body name="Dummy_Link2" pos="0 0 0.038" quat="0.707107 0 0 0.707107">
+            <inertial pos="2.38217e-10 -1.14432e-05 0" quat="0.5 0.5 0.5 0.5" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+            <joint name="Seg2_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+            <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link2"/>
+            <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link2"/>
+            <body name="Seg2" quat="0.707107 0 0 -0.707107">
+              <inertial pos="1.13265e-05 1.13203e-05 0.0190104" quat="0 0.707107 0 0.707107" mass="0.0517894" diaginertia="4.89434e-05 2.463e-05 2.46299e-05"/>
+              <joint name="Seg2_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+              <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg2"/>
+              <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg2"/>
+              <body name="Dummy_Link3" pos="0 0 0.038" quat="0.707107 0 0 0.707107">
+                <inertial pos="2.38221e-10 -1.14432e-05 0" quat="0.5 0.5 0.5 0.5" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                <joint name="Seg3_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link3"/>
+                <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link3"/>
+                <body name="Seg3" quat="0.707107 0 0 -0.707107">
+                  <inertial pos="1.13265e-05 1.13203e-05 0.0190104" quat="0 0.707107 0 0.707107" mass="0.0517894" diaginertia="4.89434e-05 2.463e-05 2.46299e-05"/>
+                  <joint name="Seg3_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg3"/>
+                  <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg3"/>
+                  <body name="Dummy_Link4" pos="0 0 0.038" quat="0.707107 0 0 0.707107">
+                    <inertial pos="2.38221e-10 -1.14432e-05 0" quat="0.5 0.5 0.5 0.5" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                    <joint name="Seg4_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                    <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link4"/>
+                    <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link4"/>
+                    <body name="Seg4" quat="0.707107 0 0 -0.707107">
+                      <inertial pos="1.13265e-05 1.13203e-05 0.0190104" quat="0 0.707107 0 0.707107" mass="0.0517894" diaginertia="4.89434e-05 2.463e-05 2.46299e-05"/>
+                      <joint name="Seg4_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg4"/>
+                      <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg4"/>
+                      <body name="Dummy_Link5" pos="0 0 0.038" quat="0.707105 0 0 0.707108">
+                        <inertial pos="2.38221e-10 -1.14432e-05 0" quat="0.5 0.5 0.5 0.5" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                        <joint name="Seg5_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link5"/>
+                        <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link5"/>
+                        <body name="Seg5" quat="0.707105 0 0 -0.707108">
+                          <inertial pos="1.13108e-05 1.15692e-05 0.0188928" quat="0.5 0.5 -0.5 0.5" mass="0.0468679" diaginertia="4.04114e-05 2.03398e-05 2.03378e-05"/>
+                          <joint name="Seg5_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0 0.501961 1 1" mesh="Seg5"/>
+                          <geom type="mesh" rgba="0 0.501961 1 1" mesh="Seg5"/>
+                          <body name="Dummy_Link6" pos="1.14434e-05 1.14434e-05 0.038" quat="0.707107 0 0 0.707107">
+                            <inertial pos="2.3822e-10 1.14432e-05 0" quat="0.707107 0.707107 0 0" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                            <joint name="Seg6_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                            <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link6"/>
+                            <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link6"/>
+                            <body name="Seg6" quat="0.707107 0 0 -0.707107">
+                              <inertial pos="-2.63592e-07 2.49875e-07 0.0180216" quat="0.5 0.5 -0.5 0.5" mass="0.023588" diaginertia="1.32265e-05 6.67359e-06 6.6734e-06"/>
+                              <joint name="Seg6_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                              <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg6"/>
+                              <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg6"/>
+                              <body name="Dummy_Link7" pos="0 0 0.036" quat="0.707107 0 0 0.707107">
+                                <inertial pos="2.3822e-10 1.14432e-05 0" quat="0.707107 0.707107 0 0" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                                <joint name="Seg7_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link7"/>
+                                <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link7"/>
+                                <body name="Seg7" quat="0.707107 0 0 -0.707107">
+                                  <inertial pos="-2.63592e-07 2.49875e-07 0.0180216" quat="0.5 0.5 -0.5 0.5" mass="0.023588" diaginertia="1.32265e-05 6.67359e-06 6.6734e-06"/>
+                                  <joint name="Seg7_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg7"/>
+                                  <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg7"/>
+                                  <body name="Dummy_Link8" pos="0 0 0.036" quat="0.707107 0 0 0.707107">
+                                    <inertial pos="2.3822e-10 1.14432e-05 0" quat="0.707107 0.707107 0 0" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                                    <joint name="Seg8_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                    <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link8"/>
+                                    <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link8"/>
+                                    <body name="Seg8" quat="0.707107 0 0 -0.707107">
+                                      <inertial pos="-2.63592e-07 2.49875e-07 0.0180216" quat="0.5 0.5 -0.5 0.5" mass="0.023588" diaginertia="1.32265e-05 6.67359e-06 6.6734e-06"/>
+                                      <joint name="Seg8_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg8"/>
+                                      <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg8"/>
+                                      <body name="Dummy_Link9" pos="0 0 0.036" quat="0.707107 0 0 0.707107">
+                                        <inertial pos="2.38221e-10 1.14432e-05 0" quat="0.707107 0.707107 0 0" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                                        <joint name="Seg9_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link9"/>
+                                        <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link9"/>
+                                        <body name="Seg9" quat="0.707107 0 0 -0.707107">
+                                          <inertial pos="-2.63592e-07 2.49875e-07 0.0180216" quat="0.5 0.5 -0.5 0.5" mass="0.023588" diaginertia="1.32265e-05 6.67359e-06 6.6734e-06"/>
+                                          <joint name="Seg9_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0 0.752941 0 1" mesh="Seg9"/>
+                                          <geom type="mesh" rgba="0 0.752941 0 1" mesh="Seg9"/>
+                                          <body name="Dummy_Link10" pos="0 0 0.036" quat="0.707105 0 0 0.707108">
+                                            <inertial pos="2.3822e-10 1.14432e-05 0" quat="0.707107 0.707107 0 0" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                                            <joint name="Seg10_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                            <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link10"/>
+                                            <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link10"/>
+                                            <body name="Seg10" quat="0.707105 0 0 -0.707108">
+                                              <inertial pos="2.54288e-07 -2.40792e-07 0.0180276" quat="0.5 0.5 -0.5 0.5" mass="0.0238076" diaginertia="1.32046e-05 6.66111e-06 6.66093e-06"/>
+                                              <joint name="Seg10_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                              <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0 0.752941 0 1" mesh="Seg10"/>
+                                              <geom type="mesh" rgba="0 0.752941 0 1" mesh="Seg10"/>
+                                              <body name="Dummy_Link11" pos="0 0 0.036" quat="0.707107 0 0 0.707107">
+                                                <inertial pos="-2.3822e-10 -1.14432e-05 0" quat="0.707107 0.707107 0 0" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                                                <joint name="Seg11_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                                <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link11"/>
+                                                <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link11"/>
+                                                <body name="Seg11" quat="0.707107 0 0 -0.707107">
+                                                  <inertial pos="3.26363e-07 -3.08926e-07 0.0656029" quat="0.5 0.5 -0.5 0.5" mass="0.0185555" diaginertia="5.30695e-06 2.71232e-06 2.71213e-06"/>
+                                                  <joint name="Seg11_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                                  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg11"/>
+                                                  <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg11"/>
+                                                  <body name="Dummy_Link12" pos="0 0 0.034" quat="0.707107 0 0 0.707107">
+                                                    <inertial pos="-2.3822e-10 -1.14432e-05 0" quat="0.707107 0.707107 0 0" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                                                    <joint name="Seg12_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                                    <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link12"/>
+                                                    <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link12"/>
+                                                    <body name="Seg12" quat="0.707107 0 0 -0.707107">
+                                                      <inertial pos="6.23121e-07 -5.89829e-07 0.0170495" quat="0.5 0.5 -0.5 0.5" mass="0.00971855" diaginertia="2.65797e-06 1.36427e-06 1.36409e-06"/>
+                                                      <joint name="Seg12_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                                      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg12"/>
+                                                      <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg12"/>
+                                                      <body name="Dummy_Link13" pos="0 0 0.034" quat="0.707107 0 0 0.707107">
+                                                        <inertial pos="-2.3822e-10 -1.14432e-05 0" quat="0.707107 0.707107 0 0" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                                                        <joint name="Seg13_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                                        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link13"/>
+                                                        <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link13"/>
+                                                        <body name="Seg13" quat="0.707107 0 0 -0.707107">
+                                                          <inertial pos="6.23121e-07 -5.89829e-07 0.0170495" quat="0.5 0.5 -0.5 0.5" mass="0.00971855" diaginertia="2.65797e-06 1.36427e-06 1.36409e-06"/>
+                                                          <joint name="Seg13_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                                          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg13"/>
+                                                          <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg13"/>
+                                                          <body name="Dummy_Link14" pos="0 0 0.034" quat="0.707107 0 0 0.707107">
+                                                            <inertial pos="-2.3822e-10 -1.14432e-05 0" quat="0.707107 0.707107 0 0" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                                                            <joint name="Seg14_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                                            <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link14"/>
+                                                            <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link14"/>
+                                                            <body name="Seg14" quat="0.707107 0 0 -0.707107">
+                                                              <inertial pos="6.23121e-07 -5.89829e-07 0.0170495" quat="0.5 0.5 -0.5 0.5" mass="0.00971855" diaginertia="2.65797e-06 1.36427e-06 1.36409e-06"/>
+                                                              <joint name="Seg14_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                                              <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg14"/>
+                                                              <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg14"/>
+                                                              <body name="Dummy_Link15" pos="0 0 0.034" quat="0.707105 0 0 0.707108">
+                                                                <inertial pos="-2.3822e-10 -1.14432e-05 0" quat="0.707107 0.707107 0 0" mass="0.000197797" diaginertia="1.25661e-09 1.20513e-09 1.07283e-09"/>
+                                                                <joint name="Seg15_x" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                                                <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link15"/>
+                                                                <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Dummy_Link15"/>
+                                                                <body name="Seg15" quat="0.707105 0 0 -0.707108">
+                                                                  <inertial pos="1.06309e-10 2.37159e-11 0.0161644" quat="0 0.707107 0 0.707107" mass="0.00861147" diaginertia="2.38943e-06 1.21755e-06 1.21666e-06"/>
+                                                                  <joint name="Seg15_y" pos="0 0 0" axis="-1 0 0" range="-0.4363 0.4363" actuatorfrcrange="-20 20"/>
+                                                                  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="Seg15"/>
+                                                                  <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Seg15"/>
+                                                                </body>
+                                                              </body>
+                                                            </body>
+                                                          </body>
+                                                        </body>
+                                                      </body>
+                                                    </body>
+                                                  </body>
+                                                </body>
+                                              </body>
+                                            </body>
+                                          </body>
+                                        </body>
+                                      </body>
+                                    </body>
+                                  </body>
+                                </body>
+                              </body>
+                            </body>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>
