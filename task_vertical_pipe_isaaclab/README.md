@@ -5,6 +5,13 @@ and feeds down through a vertical pipe) to Isaac Sim 5.1 / Isaac Lab 2.3.2, trai
 Observation, action, reward, termination, reset / randomization, `dt` and `frame_skip` are the
 ones of the MuJoCo env; the PPO update and hyperparameters are the ones of its SB3 trainer.
 
+![10 robots in Isaac Sim](media/isaac_10_robots.png)
+
+![Two-panel view](media/isaac_two_panel.png)
+
+Videos (policy trained in MuJoCo, run in Isaac Sim): [12 random pipes, two-panel view](media/isaac_vertical_pipe_random_wide.mp4)
+(12/12 success) and [10 robots at once](media/isaac_10_robots.mp4) (20/20 success).
+
 | file | content |
 |---|---|
 | `constants.py` | task constants, copied 1:1 from `vertical_pipe_env.py` / `continuum_algorithm.py` |
