@@ -39,6 +39,7 @@ import constants as C  # noqa: E402
 
 GEN_MJCF_DIR = os.path.join(C.GENERATED_DIR, "mjcf")
 GEN_USD_DIR = os.path.join(C.GENERATED_DIR, "usd")
+EXIT_MARGIN_LEGS = C.EXIT_MARGIN + 0.060 + 0.005   # highest pipe bottom above the plate (reset_logic) + margin
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +244,8 @@ def write_pipe_usd(path, pipe_mode):
     r_in, wall = C.PLATE_HOLE_RADIUS, C.PIPE_WALL
     half_width = (r_in + wall) * np.tan(np.pi / C.N_STAVES)
 
+    if os.path.exists(path):
+        os.remove(path)
     stage = Usd.Stage.CreateNew(path)
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
@@ -290,6 +293,19 @@ def write_pipe_usd(path, pipe_mode):
     add_tube("pipe_tube", r_in, r_in + wall, -h, 0.0, [0.55, 0.78, 1.0, 0.35])
     add_tube("pipe_collar_top", r_in + 0.0005, r_in + wall + 0.004, -0.006, 0.0006, [1.0, 0.78, 0.12, 1.0])
     add_tube("pipe_collar_bot", r_in + 0.0005, r_in + wall + 0.004, -h - 0.0006, -h + 0.006, [0.2, 0.85, 0.35, 1.0])
+    if pipe_mode == "random":
+        # three legs down to the plate (MuJoCo sets their length per episode; here they are long enough for
+        # the highest pipe and the rest disappears in the 30 mm plate)
+        leg_len = EXIT_MARGIN_LEGS
+        for k in range(3):
+            angle = np.deg2rad(90.0 + 120.0 * k)
+            leg = UsdGeom.Cylinder.Define(stage, f"/Pipe/visuals/pipe_leg_{k}")
+            leg.CreateRadiusAttr(0.003)
+            leg.CreateHeightAttr(leg_len)
+            leg.CreateAxisAttr("Z")
+            UsdGeom.XformCommonAPI(leg).SetTranslate(Gf.Vec3d((r_in + wall + 0.006) * np.cos(angle),
+                                                              (r_in + wall + 0.006) * np.sin(angle), -h - 0.5 * leg_len))
+            leg.CreateDisplayColorAttr([Gf.Vec3f(0.45, 0.45, 0.5)])
     stage.GetRootLayer().Save()
     return path
 
@@ -301,6 +317,7 @@ def main():
     parser.add_argument("--mesh-dir", default=r"D:\mujoco\Continuum_MuJoCo\urdf",
                         help="folder with the .obj meshes referenced by the MJCF (visual USD only)")
     parser.add_argument("--no-visual", action="store_true", help="only build the collider-only USD")
+    parser.add_argument("--pipes-only", action="store_true", help="only rewrite pipe_rig.usd / pipe_random.usd")
     from isaaclab.app import AppLauncher
     AppLauncher.add_app_launcher_args(parser)
     if not any(a.startswith("--/app/vulkan") for a in sys.argv):
@@ -308,8 +325,8 @@ def main():
     args, _ = parser.parse_known_args()
     args.headless = True
 
-    variants = {"continuum_physics": False}
-    if not args.no_visual:
+    variants = {} if args.pipes_only else {"continuum_physics": False}
+    if not args.no_visual and not args.pipes_only:
         if os.path.isdir(args.mesh_dir):
             variants["continuum_visual"] = True
         else:
@@ -339,6 +356,10 @@ def main():
         report.append(f"pipe ({mode}): {path}  bore {C.bore_length(mode) * 1000:.0f} mm, {C.N_STAVES} box staves")
 
     text = "\n".join(report)
+    if args.pipes_only:
+        print(text)
+        app.close()
+        return
     with open(os.path.join(C.GENERATED_DIR, "conversion_report.txt"), "w", encoding="utf-8") as f:
         f.write(text + "\n")
     print(text)
