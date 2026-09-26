@@ -24,6 +24,10 @@ Videos (policy trained in MuJoCo, run in Isaac Sim): [12 random pipes, two-panel
 | `train_vertical_pipe.py`, `play_vertical_pipe.py` | training / viewer, statistics, video |
 | `import_sb3_policy.py` | SB3 model of the MuJoCo trainer (`.zip`) -> rsl_rl checkpoint (same networks) |
 | `record_video.py` | two-panel MP4 (fixed wide view + close-up of the pipe entrance, HUD, guides) like the MuJoCo demo |
+| `vision_env.py` | the env + an RGB-D camera on the tip (Seg15); the policy can see the camera's pipe estimate instead of the true pose |
+| `perception.py` | pipe-mouth detector: yellow collar mask + depth -> 3D points -> circle fit (centre, height, quality) |
+| `vision_pipeline.py` | look / lift / conical scan with the tip camera, return to the start pose, then the RL policy inserts |
+| `play_vision.py` | statistics (vision vs true pose, sensor noise) and MP4 with the tip-camera view |
 | `tests/compare_with_mujoco.py` | checks against the MuJoCo env (runs in the MuJoCo venv) |
 | `tests/check_isaac_env.py` | checks of the Isaac env, replay of MuJoCo trajectories in PhysX |
 | `assets/mjcf/ContinuumRobot_Native.xml` | source MJCF (copy of `urdf/ContinuumRobot_Native.xml`) |
@@ -188,6 +192,90 @@ are kept for reference and have to be redone.
 `best_model.pt` of that run, 100 episodes per scene: rig 92 % success (8 time-outs), random 64 %
 (13 rim hits, 23 time-outs). It still slides along the wall (68 wall-contact steps per rig episode)
 and is slow (5.7 s); it has seen 7 % of the 3M training steps.
+
+## Tip camera: find the pipe, then insert (vision pipeline)
+
+The policy above reads the true pipe pose (`pipe_xy`, `z_top`) in its observation, which a real
+robot does not have. `vision_env.py` puts an RGB-D camera on the tip (Seg15, on the tip axis, 0.5 mm
+outside the tip face, looking out of it, 120 deg, 160 x 160 px) and lets the policy see the pipe pose
+*measured by that camera* instead; reward / termination still use the true pose. The policy itself is
+unchanged (`models/mujoco_ppo_vpipe_wide/model.pt`).
+
+![Scene view + tip camera](media/isaac_vision_tipcam.png)
+
+Video: [8 random pipes, seed 1, scene view + tip camera](media/isaac_vision_tipcam.mp4) (magenta: collar
+pixels, green: estimated pipe mouth; 6 of the 8 pipes are only found by the scan; 7/8 success; the
+rim hit, with a 1.1 mm estimate error, is a start state where the policy succeeds with the true pose).
+
+```cmd
+%ISAAC% play_vision.py --episodes 100                        :: statistics, rig + random pipe
+%ISAAC% play_vision.py --episodes 100 --obs-source gt        :: same scenes, true pose (baseline)
+%ISAAC% play_vision.py --depth-noise 0.005 --rgb-noise 0.05  :: sensor noise
+%ISAAC% play_vision.py --meshes                              :: CAD frame / plate / robot in the camera view
+%ISAAC% play_vision.py --video --pipe-mode random --episodes 8 --seed 1   :: scene view + tip camera
+```
+
+Pipeline (`vision_pipeline.SearchInsertController`, one state machine per env, same 7-D action as the policy):
+
+| phase | what the robot does |
+|---|---|
+| LOOK | holds the start pose 4 steps (servo lag, render latency), measures; a collar seen over >= 50 % of its circle -> INSERT |
+| LIFT | elevator to the top (wider view), measures again |
+| SCAN | sections 2 + 3 bent the same way (0.25 / 0.35 rad: camera tilted ~0.6 rad), bend direction turned around the robot axis; stops when the collar pixel count has peaked, settles, measures |
+| RETURN | bend back to the start bend, then elevator down to the start height: the policy starts from the pose it was trained on, and the way back is the way out |
+| REFINE | measures again at the start pose if the collar is in view (closer, better) |
+| INSERT | the RL policy with the estimated pipe pose in its observation |
+
+Detector (`perception.PipeDetector`, classical): yellow-collar colour mask -> depth (5 x 5 median) ->
+3D points in the env frame (camera pose = Seg15 link pose + mounting offset, i.e. forward kinematics)
+-> points of the collar's flat top face -> circle of known radius (algebraic start, Gauss-Newton with
+outlier trimming; a partial arc works). A short arc also fits a circle on its other side: the centre
+that has the light-blue tube inside the collar wins. Points beyond 0.5 m (other rigs in the scene)
+and centres outside the robot's reach are rejected.
+
+Results, 100 episodes per scene and setting (same start states for all settings of a seed; episode
+limit 1000 steps for search + insertion):
+
+| success rate (rig / random) | seed 9000 | seed 1 |
+|---|---|---|
+| true pipe pose, no search (baseline) | 100 % / 99 % | 100 % / 95 % |
+| tip camera, colliders only in view | 100 % / 99 % | 100 % / 96 % |
+| tip camera, CAD frame / plate / robot in view (`--meshes`) | 100 % / 99 % | 100 % / 96 % |
+| tip camera, depth noise 2 mm, colour noise 0.03 | 100 % / 99 % | |
+| tip camera, depth noise 5 mm, colour noise 0.05 | 100 % / 99 % | 100 % / 95 % |
+| tip camera, depth noise 5 mm, colour noise 0.05, `--meshes` | 100 % / 99 % | |
+
+| error of the estimated pipe mouth (xy: median / 95 % / max) | rig | random |
+|---|---|---|
+| no noise | 0.5-0.7 / 0.9-1.3 / 1.5 mm | 0.7-0.9 / 2.0-2.5 / 3.7 mm |
+| depth noise 5 mm | 0.9-3.1 / 2.0-5.9 / 8.2 mm | 1.4-2.1 / 3.9-5.1 / 6.8 mm |
+
+(z error: median <= 0.15 mm, max 3.8 mm without noise; median 0.3-3.3 mm with 5 mm depth noise.)
+Every failure is a rim hit during the insertion; on seed 1 they are mostly in the start states where
+the policy also hits the rim with the true pose (policy limit, not perception).
+How the pipe was found: rig 33-44 % from the start pose, 43-62 % after lifting, 5-13 % by the scan;
+random pipe 32-36 % start, 12-20 % lift, 47-52 % scan. Search and hand-over take 1.1-1.6 s on
+average (max 7 s), so a successful episode takes 2.9-4.0 s instead of 1.8-2.5 s.
+
+Bugs found on the way (fixed): with the camera tilted towards the horizon it saw the pipe of the
+neighbouring rig 2 m away (-> range limit + workspace check); at grazing angles most collar pixels
+are on its 6.6 mm outer wall, which pulled the centre up to 3.7 mm towards the camera (-> top face
+only); with noise, one short arc was fitted on its wrong side (80 mm error, -> tube-inside test).
+
+What this is and is not: a **vision-guided, modular** pipeline (camera -> classical perception ->
+pose estimate -> RL policy), not a VLA model: there is no language input and no end-to-end model
+from pixels to actions. Limits of this step:
+- the detector relies on the yellow collar, i.e. a colour marker; a real pipe needs a learned
+  detector (e.g. a small CNN trained on images rendered here, with the true pose as label, and
+  randomised lighting / textures);
+- the camera pose comes from the simulated link pose (exact forward kinematics); on the real
+  continuum robot the tip pose itself has kinematic errors;
+- the noise model is independent Gaussian noise per pixel; the policy was not trained with
+  estimation errors.
+Next steps: a student policy that acts from the tip images directly (teacher-student distillation of
+the current policy, DAgger), then a language-conditioned target choice (several pipes, a VLM picks
+the one named in the instruction), and finally a VLA fine-tuned on (image, instruction, action)
+demonstrations generated with these policies in Isaac Lab.
 
 ## Notes
 
