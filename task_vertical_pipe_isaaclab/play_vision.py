@@ -9,7 +9,7 @@ the search / hand-over logic is vision_pipeline.py. Needs cameras (always enable
     D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_vision.py --obs-source gt --episodes 50   # baseline, true pose
     D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_vision.py --depth-noise 0.005 --rgb-noise 0.05
     D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_vision.py --meshes     # CAD frame / plate in the camera view
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_vision.py --video --pipe-mode random --episodes 6
+    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_vision.py --video --pipe-mode random --episodes 8 --seed 1   # --view close: near the pipe
 
 Statistics: success / failure per pipe mode, how the pipe was found (start view, after
 lifting, scan), search time, and the error of the estimated pipe mouth vs the truth.
@@ -47,6 +47,9 @@ parser.add_argument("--rgb-noise", type=float, default=0.0, help="std of the col
 parser.add_argument("--meshes", action="store_true",
                     help="statistics with the CAD meshes (frame, plate, robot) in the camera view; the video always has them")
 parser.add_argument("--video", action="store_true", help="MP4: scene view + tip camera (one robot)")
+parser.add_argument("--view", choices=["wide", "close"], default="wide",
+                    help="video scene view: wide = whole rig incl. the elevator (prismatic joint) and its tower, "
+                         "portrait, with a joint gauge; close = near the pipe")
 parser.add_argument("--output", type=str, default="")
 parser.add_argument("--hold", type=float, default=1.0, help="video: seconds to hold the end of each episode")
 AppLauncher.add_app_launcher_args(parser)
@@ -66,7 +69,15 @@ from vision_env import VisionPipeEnv, VisionPipeEnvCfg  # noqa: E402
 from vision_pipeline import GIVE_UP, INSERT, PHASE_NAMES, SearchInsertController, load_actor  # noqa: E402
 from perception import collar_mask  # noqa: E402
 
-VIEW_W, VIEW_H, CAM_PANEL = 960, 720, 720
+CAM_PANEL = 720
+# scene camera per --view: (resolution, lookat, eye); the wide view is portrait so that the elevator tower
+# above the frame (it rises and sinks with the prismatic joint) and the pipe below both fit
+VIEWS = {
+    "wide": ((720, 960), (0.10, 0.02, 1.04), (0.945, -0.989, 1.340)),
+    "close": ((960, 720), (0.09, 0.21, 0.58), (0.62, -0.42, 0.86)),
+}
+VIEW_W, VIEW_H = VIEWS[args.view][0]
+GAUGE_H = VIEW_H - CAM_PANEL                # wide: joint gauge below the tip camera
 
 
 def make_env(modes, num_envs, render, meshes):
@@ -83,8 +94,10 @@ def make_env(modes, num_envs, render, meshes):
     cfg.visual = meshes
     cfg.sim.device = args.device
     if render:
-        cfg.viewer.resolution = (VIEW_W, VIEW_H)
-        cfg.viewer.eye = (0.62, -0.42, 0.86)
+        res, lookat, eye = VIEWS[args.view]
+        cfg.viewer.resolution = res
+        cfg.viewer.lookat = tuple(float(v) for v in lookat)
+        cfg.viewer.eye = tuple(float(v) for v in eye)
     return VisionPipeEnv(cfg, render_mode="rgb_array" if render else None)
 
 
@@ -128,6 +141,43 @@ def tip_panel(env, ctrl, i):
     return img
 
 
+def bar(img, x, y, w, h, lo, hi, value, cmd=None, color=(0, 200, 255)):
+    """Horizontal gauge: filled up to `value`, white tick at `cmd`."""
+    cv2.rectangle(img, (x, y), (x + w, y + h), (70, 72, 80), -1)
+    f = float(np.clip((value - lo) / (hi - lo), 0.0, 1.0))
+    cv2.rectangle(img, (x, y), (x + int(f * w), y + h), color, -1)
+    if cmd is not None:
+        c = x + int(float(np.clip((cmd - lo) / (hi - lo), 0.0, 1.0)) * w)
+        cv2.line(img, (c, y - 4), (c, y + h + 4), (255, 255, 255), 2)
+
+
+def gauge_panel(env, ctrl, i):
+    """Prismatic joint (elevator) position / command / speed and the bend of the 3 sections."""
+    img = np.full((GAUGE_H, CAM_PANEL, 3), (26, 24, 20), dtype=np.uint8)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    j = env._jelev[0]
+    q = float(env.robot.data.joint_pos[i, j])
+    qd = float(env.robot.data.joint_vel[i, j])
+    cmd = float(env.elev_cmd[i])
+    lo, hi = C.ELEV_RANGE
+    cv2.putText(img, "PRISMATIC JOINT (elevator: lead screw lifts the whole robot + tower)", (14, 28), font, 0.5,
+                (0, 230, 255), 1, cv2.LINE_AA)
+    arrow = "  UP" if qd > 0.002 else ("  DOWN" if qd < -0.002 else "")
+    cv2.putText(img, f"{q * 1000:+7.1f} mm   speed {qd * 1000:+6.1f} mm/s{arrow}", (14, 60), font, 0.65,
+                (255, 255, 255), 2, cv2.LINE_AA)
+    bar(img, 14, 76, CAM_PANEL - 28, 22, lo, hi, q, cmd)
+    cv2.putText(img, f"{lo * 1000:.0f} mm", (14, 118), font, 0.42, (180, 180, 180), 1, cv2.LINE_AA)
+    cv2.putText(img, f"+{hi * 1000:.0f} mm", (CAM_PANEL - 80, 118), font, 0.42, (180, 180, 180), 1, cv2.LINE_AA)
+    cv2.putText(img, "white tick: command", (CAM_PANEL // 2 - 70, 118), font, 0.42, (180, 180, 180), 1, cv2.LINE_AA)
+    theta = torch.linalg.norm(env.bend_cmd[i], dim=1).cpu().numpy()
+    for s_, th in enumerate(theta):
+        y = 140 + 30 * s_
+        cv2.putText(img, f"section {s_ + 1} bend {np.rad2deg(th):5.1f} deg", (14, y + 15), font, 0.45,
+                    (230, 230, 230), 1, cv2.LINE_AA)
+        bar(img, 250, y, CAM_PANEL - 264, 16, 0.0, C.THETA_MAX, th, color=(80, 200, 80))
+    return img
+
+
 def scene_panel(env, ctrl, i, ep, n_eps, step, finished):
     frame = cv2.cvtColor(np.ascontiguousarray(env.render()), cv2.COLOR_RGB2BGR)
     frame = cv2.resize(frame, (VIEW_W, VIEW_H))
@@ -147,7 +197,10 @@ def scene_panel(env, ctrl, i, ep, n_eps, step, finished):
         color = (40, 170, 40) if finished.startswith("THROUGH") else (40, 40, 200)
         cv2.rectangle(frame, (x - 20, y - th - 14), (x + tw + 20, y + 14), color, -1)
         cv2.putText(frame, finished, (x, y), font, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
-    return np.concatenate([frame, tip_panel(env, ctrl, i)], axis=1)
+    right = tip_panel(env, ctrl, i)
+    if GAUGE_H > 0:
+        right = np.concatenate([right, gauge_panel(env, ctrl, i)], axis=0)
+    return np.concatenate([frame, right], axis=1)
 
 
 # ---------------------------------------------------------------------------
@@ -159,9 +212,12 @@ def run(actor, modes):
     env.auto_reset = False
     obs, _ = env.reset()
     ctrl.reset(range(n))
+    if video:                                   # the first viewport image comes out black
+        for _ in range(3):
+            env.render()
     writer, out = None, ""
     if video:
-        out = args.output or os.path.join(TASK_DIR, "videos", f"vision_{args.pipe_mode}.mp4")
+        out = args.output or os.path.join(TASK_DIR, "videos", f"vision_{args.pipe_mode}_{args.view}.mp4")
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
         writer = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), 25.0, (VIEW_W + CAM_PANEL, VIEW_H))
     results = {m: [] for m in modes}

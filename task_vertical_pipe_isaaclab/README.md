@@ -201,18 +201,21 @@ outside the tip face, looking out of it, 120 deg, 160 x 160 px) and lets the pol
 *measured by that camera* instead; reward / termination still use the true pose. The policy itself is
 unchanged (`models/mujoco_ppo_vpipe_wide/model.pt`).
 
-![Scene view + tip camera](media/isaac_vision_tipcam.png)
+![Whole rig + tip camera + prismatic joint gauge](media/isaac_vision_tipcam_wide.png)
 
-Video: [8 random pipes, seed 1, scene view + tip camera](media/isaac_vision_tipcam.mp4) (magenta: collar
-pixels, green: estimated pipe mouth; 6 of the 8 pipes are only found by the scan; 7/8 success; the
-rim hit, with a 1.1 mm estimate error, is a start state where the policy succeeds with the true pose).
+Videos of the same 8 random pipes (seed 1): [whole rig, the elevator tower rising and sinking with the
+prismatic joint, joint gauge](media/isaac_vision_tipcam_wide.mp4) and [close view of the
+pipe](media/isaac_vision_tipcam.mp4), both with the tip camera (magenta: collar pixels, green:
+estimated pipe mouth). 6 of the 8 pipes are only found by the scan; 7/8 success; the rim hit, with a
+1.1 mm estimate error, is a start state where the policy succeeds with the true pose.
 
 ```cmd
 %ISAAC% play_vision.py --episodes 100                        :: statistics, rig + random pipe
 %ISAAC% play_vision.py --episodes 100 --obs-source gt        :: same scenes, true pose (baseline)
 %ISAAC% play_vision.py --depth-noise 0.005 --rgb-noise 0.05  :: sensor noise
 %ISAAC% play_vision.py --meshes                              :: CAD frame / plate / robot in the camera view
-%ISAAC% play_vision.py --video --pipe-mode random --episodes 8 --seed 1   :: scene view + tip camera
+%ISAAC% play_vision.py --video --pipe-mode random --episodes 8 --seed 1   :: whole rig + tip camera + joint gauge
+%ISAAC% play_vision.py --video --view close --pipe-mode random --episodes 8 --seed 1   :: close view of the pipe
 ```
 
 Pipeline (`vision_pipeline.SearchInsertController`, one state machine per env, same 7-D action as the policy):
