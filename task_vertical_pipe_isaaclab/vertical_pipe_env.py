@@ -125,6 +125,7 @@ class VerticalPipeEnvCfg(DirectRLEnvCfg):
     # let the tip sink ~0.5-1.3 mm into the rim when it is pushed onto it; PhysX contacts are rigid.
     contact_touch_tolerance: float = 1.0e-4  # separation (m) up to which an inner-wall point counts as contact
     rim_touch_tolerance: float = 1.0e-3      # separation (m) up to which a point outside inner_contact_r is a rim hit
+    contact_point_tolerance: float = 1.5e-3  # max distance (beyond the separation) of a point from its segment's collider
     unstable_joint_vel: float = 1.0e3        # |qdot| above this (rad/s, m/s) is treated like mjWARN_BADQACC
 
     # -- env
@@ -266,6 +267,9 @@ class VerticalPipeEnv(DirectRLEnv):
         self._contact_view = view
         self._contact_row_env = torch.as_tensor(row_env, dtype=torch.long, device=self.device)
         self._contact_row_seg = torch.as_tensor(self._contact_row_body, dtype=torch.long, device=self.device)
+        self._seg_body_ids = torch.as_tensor(self._seg_ids, dtype=torch.long, device=self.device)
+        self._col_r, self._col_z0, self._col_z1 = (
+            torch.tensor([C.SEG_COLLIDERS[i][k] for i in range(1, 16)], device=self.device) for k in range(3))
 
     # ------------------------------------------------------------------
     # Measurements
@@ -281,16 +285,32 @@ class VerticalPipeEnv(DirectRLEnv):
         rows = torch.repeat_interleave(torch.arange(counts.numel(), device=self.device), counts)
         first = torch.cumsum(counts, 0) - counts
         idx = starts[rows] + torch.arange(total, device=self.device) - first[rows]
-        pts = points[idx].to(torch.float64)
+        pts_w = points[idx]
         sep = separations[idx].view(-1)
         env_ids = self._contact_row_env[rows]
-        pts = pts - self.scene.env_origins.to(torch.float64)[env_ids]
+        seg = self._contact_row_seg[rows]
+
+        # PhysX leaves the contact buffers untouched in a step without any contact in the whole scene, so
+        # the points of an earlier contact would come back (e.g. right after a reset). A point is used only
+        # if it lies on the current collision cylinder of its segment (fresh points: within 1.03 mm of
+        # max(separation, 0), measured over 4e5 points).
+        body = self._seg_body_ids[seg]
+        local = torch.einsum("nji,nj->ni", matrix_from_quat(self.robot.data.body_link_quat_w[env_ids, body]),
+                             pts_w - self.robot.data.body_link_pos_w[env_ids, body])
+        rho = torch.linalg.norm(local[:, :2], dim=1)
+        dz = torch.clamp(torch.maximum(self._col_z0[seg] - local[:, 2], local[:, 2] - self._col_z1[seg]), min=0.0)
+        dr = torch.clamp(rho - self._col_r[seg], min=0.0)
+        depth = torch.minimum(self._col_r[seg] - rho,
+                              torch.minimum(local[:, 2] - self._col_z0[seg], self._col_z1[seg] - local[:, 2]))
+        dist = torch.where((dz > 0) | (dr > 0), torch.sqrt(dz ** 2 + dr ** 2), depth)
+        fresh = dist.abs() <= torch.clamp(sep, min=0.0) + self.cfg.contact_point_tolerance
+        pts_w, sep, env_ids, seg, rows = pts_w[fresh], sep[fresh], env_ids[fresh], seg[fresh], rows[fresh]
+        pts = pts_w.to(torch.float64) - self.scene.env_origins.to(torch.float64)[env_ids]
         if getattr(self, "debug_contacts", False) and getattr(self, "_in_get_dones", False):
             radius = torch.linalg.norm(pts[:, :2] - self.pipe_xy[env_ids], dim=1)
             self.last_contacts = (env_ids.cpu(), radius.cpu(), sep.cpu(), pts.cpu(),
                                   torch.as_tensor(self._contact_row_body)[rows.cpu()])
         # one contact per (segment, stave) pair, like MuJoCo's convex-convex collision
-        seg = self._contact_row_seg[rows]
         stave = mdp.stave_index(pts, self.pipe_xy[env_ids], C.N_STAVES)
         pair_ids = (env_ids * len(SEG_NAMES) + seg) * C.N_STAVES + stave
         return mdp.classify_contacts(pts, env_ids, self.pipe_xy, C.inner_contact_radius(), n,

@@ -114,7 +114,7 @@ What the importer does not carry over, and the replacement:
 | mocap pipe body | kinematic rigid body, moved at reset (`write_root_pose_to_sim`) |
 | world-body frame geoms + slide joint to the world | jointless `base_link` root (fixed joint), the elevator is a prismatic articulation joint; the importer anchors the fixed joint at the world origin, the env moves each env's anchor to its env origin |
 | extra `worldBody` articulation root, visual copies of the collision cylinders, instanced colliders | removed / hidden / de-instanced by the converter |
-| contact list `data.contact` | PhysX contact points of every segment with the pipe of its env (tensor contact view). MuJoCo gives 1-2 contacts per segment / stave pair, PhysX a patch of up to ~30 points: the wall-contact count uses one contact per (segment, stave) pair, the stave found from the point's angle around the pipe axis |
+| contact list `data.contact` | PhysX contact points of every segment with the pipe of its env (tensor contact view). MuJoCo gives 1-2 contacts per segment / stave pair, PhysX a patch of up to ~30 points: the wall-contact count uses one contact per (segment, stave) pair, the stave found from the point's angle around the pipe axis. PhysX leaves the contact buffers untouched in a step without any contact in the scene, so stale points of an earlier contact come back (with few envs this gave false rim hits right after resets); a point is only used if it lies on the current collider of its segment (`contact_point_tolerance`, 1.5 mm beyond its separation) |
 | `mj_forward` + `ncon == 0` test of a start pose | `kinematics.pipe_overlap` (sampled cylinder / box overlap); gives the same accept / reject as MuJoCo on all 1800 test resets |
 | `mjWARN_BADQACC` ("unstable") | non-finite joint state or joint speed > 1000 rad/s (m/s) |
 
@@ -158,6 +158,11 @@ Isaac Lab, same settings: 16 envs / seed 0 with rsl_rl: 0 % at 150k; SB3 itself 
 (50k steps: 0 % success, 7 % rim hits, 92 % time-outs in both). 12 envs / seed 0 with rsl_rl: see
 "Results" below. Several seeds (or the MuJoCo policy as a start, `--resume`) are needed to compare
 learning speed; one run is not enough in either simulator.
+
+Note: the Isaac training runs in this section and the next one were made before the stale-contact
+fix (see the contact row in the MJCF -> USD table). Stale points could end an episode with a false rim
+hit right after a reset whenever no env was touching its pipe, which made learning harder; the numbers
+are kept for reference and have to be redone.
 
 ### Results of the short training check
 
