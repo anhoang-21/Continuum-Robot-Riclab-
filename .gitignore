@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+
+# vertical-pipe task (Isaac Lab): generated assets, training output, test data
+task_vertical_pipe_isaaclab/assets/generated/
+task_vertical_pipe_isaaclab/logs/
+task_vertical_pipe_isaaclab/models/
+task_vertical_pipe_isaaclab/videos/
+task_vertical_pipe_isaaclab/tests/data/
