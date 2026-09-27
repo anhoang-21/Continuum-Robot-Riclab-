@@ -18,6 +18,12 @@ policy (bend-vector rates of the 3 sections + elevator rate):
   INSERT   the RL policy, whose observation uses the estimated pipe pose
   GIVE_UP  nothing found after the scan -> "not_found"
 
+With an image-based student (student_policy.py) instead of the privileged policy, the
+estimate is only used to put the pipe in view: after LOOK / LIFT / SCAN the robot goes
+to a pre-insertion pose (preinsert.preinsert_pose: S-curve partly formed, tip 3-5 cm
+above the mouth, collar in view; up first, then bend, then down) and the student inserts
+from the tip camera and its joint commands alone (APPROACH -> INSERT).
+
 The raise / tilt only move the tip up and away from the pipe mouth (the start pose
 has the tip above the mouth), so the search itself does not touch the pipe.
 ==============================================================================
@@ -31,9 +37,10 @@ from tensordict import TensorDict
 
 import constants as C
 from perception import Detection, PipeDetector
+from preinsert import preinsert_pose
 
-LOOK, LIFT, SCAN, RETURN, REFINE, INSERT, GIVE_UP = range(7)
-PHASE_NAMES = ("LOOK", "LIFT", "SCAN", "RETURN", "REFINE", "INSERT", "GIVE_UP")
+LOOK, LIFT, SCAN, RETURN, REFINE, INSERT, GIVE_UP, APPROACH = range(8)
+PHASE_NAMES = ("LOOK", "LIFT", "SCAN", "RETURN", "REFINE", "INSERT", "GIVE_UP", "APPROACH")
 
 SETTLE_STEPS = 4                   # steps without motion before a measurement (servo lag, render latency)
 LIFT_ELEV = C.ELEV_RANGE[1] - 0.002
@@ -42,6 +49,7 @@ SCAN_TURNS = 1.1                   # turns of the bend direction before giving u
 GOOD_START_COVERAGE = 0.5          # collar coverage that makes the start-pose view good enough
 PEAK_DROP = 0.8                    # stop scanning when the collar count falls below this x its peak
 FULL_VIEW_POINTS = 700             # ... or when this many collar pixels are in view
+APPROACH_CLEARANCE = 0.03         # m above the higher of the current / pre-insertion elevator while bending
 SCAN_COOLDOWN = 15                 # steps of turning (no stop) after a view that gave no valid measurement
 WORKSPACE_RADIUS = 0.30            # a pipe mouth farther than this from the robot axis is not ours (m)
 
@@ -62,12 +70,14 @@ def load_actor(path):
 
 
 class SearchInsertController:
-    def __init__(self, env, actor, detector: PipeDetector | None = None, use_vision=True):
+    def __init__(self, env, actor, detector: PipeDetector | None = None, use_vision=True, student=None):
         """
         use_vision=False: baseline, the policy gets the true pipe pose and starts right away
         (env.cfg.obs_source must be "gt").
+        student: image-based policy (student_policy.StudentPolicy) that inserts instead of `actor`,
+        from a pre-insertion pose (APPROACH).
         """
-        self.env, self.actor = env, actor
+        self.env, self.actor, self.student = env, actor, student
         self.det = detector or PipeDetector()
         self.use_vision = use_vision
         n = env.num_envs
@@ -83,6 +93,10 @@ class SearchInsertController:
         self.found_by = [""] * n
         self.last_det: list[Detection] = [Detection.none() for _ in range(n)]
         self.bend_rate = np.asarray(C.BEND_RATE)
+        self.app_bend = np.zeros((n, 3, 2))
+        self.app_elev = np.zeros(n)
+        self.app_high = np.zeros(n)
+        self.app_stage = np.zeros(n, dtype=int)
         self.reset(range(n))
 
     # ------------------------------------------------------------------
@@ -158,7 +172,7 @@ class SearchInsertController:
                     det = detect(i)
                     if det.valid and det.coverage >= GOOD_START_COVERAGE:
                         self._accept(i, det, "start")
-                        self._start_insert(i)
+                        self._found(i, insert_now=True)
                     else:
                         if det.valid:
                             self._accept(i, det, "start (partial)")
@@ -172,13 +186,13 @@ class SearchInsertController:
                         det = detect(i)
                         if det.valid and det.coverage >= GOOD_START_COVERAGE:
                             self._accept(i, det, "lift")
-                            self.phase[i], self.timer[i] = RETURN, 0
+                            self._found(i)
                         else:
                             self.phase[i], self.timer[i], self.peak[i] = SCAN, 0, 0
             elif ph == SCAN:
                 if self.phi[i] - self.phi0[i] > SCAN_TURNS * 2.0 * np.pi:
                     if self.found_by[i]:                    # partial view from the start pose: use it
-                        self.phase[i], self.timer[i] = RETURN, 0
+                        self._found(i)
                     else:
                         self.phase[i] = GIVE_UP
                     continue
@@ -189,7 +203,7 @@ class SearchInsertController:
                         det = detect(i)
                         if det.valid:
                             self._accept(i, det, "scan")
-                            self.phase[i], self.timer[i] = RETURN, 0
+                            self._found(i)
                         else:                               # keep turning past this view
                             self.timer[i], self.peak[i], self.cooldown[i] = 0, 0, SCAN_COOLDOWN
                     continue
@@ -216,6 +230,8 @@ class SearchInsertController:
                     if done:
                         self.phase[i], self.timer[i] = REFINE, 0
                 actions[i] = a
+            elif ph == APPROACH:
+                actions[i] = self._approach(i)
             elif ph == REFINE:
                 self.timer[i] += 1
                 if self.timer[i] >= SETTLE_STEPS:
@@ -226,7 +242,13 @@ class SearchInsertController:
 
         ins = np.nonzero(self.phase == INSERT)[0]
         act = torch.as_tensor(actions, dtype=torch.float32, device=env.device)
-        if len(ins):
+        if len(ins) and self.student is not None:
+            from student_policy import student_inputs
+
+            img, prop = student_inputs(env)
+            idx = torch.as_tensor(ins, device=env.device)
+            act[idx] = self.student.act(img[idx], prop[idx])
+        elif len(ins):
             if self._refresh:                               # estimates accepted this step: new observation
                 obs = env._get_observations()
                 env.obs_buf = obs
@@ -234,6 +256,50 @@ class SearchInsertController:
             idx = torch.as_tensor(ins, device=env.device)
             act[idx] = policy_act[idx]
         return act
+
+    def _found(self, i, insert_now=False):
+        """Pipe estimate accepted: privileged policy -> back to the start pose (or insert right away from the
+        start view); student -> pre-insertion pose computed from the estimate."""
+        if self.student is None:
+            if insert_now:
+                self._start_insert(i)
+            else:
+                self.phase[i], self.timer[i] = RETURN, 0
+            return
+        d = self.last_det[i]
+        pose = preinsert_pose(self.env.kin, d.pipe_xy, d.z_top, float(self.env.bore_length[i]))
+        if pose is None:                                    # no pre-insertion pose: start from the start pose
+            self.app_bend[i], self.app_elev[i] = self.start_bend[i], self.start_elev[i]
+        else:
+            self.app_bend[i], self.app_elev[i] = pose
+        self.phase[i], self.timer[i], self.app_stage[i] = APPROACH, 0, 0
+
+    def _approach(self, i):
+        """Up (clear of the pipe), bend to the pre-insertion shape, down, settle; then the student inserts."""
+        elev = float(self.env.elev_cmd[i])
+        bend = self.env.bend_cmd[i].cpu().numpy()
+        if self.app_stage[i] == 0:
+            self.app_high[i] = max(min(max(elev, self.app_elev[i]) + APPROACH_CLEARANCE, LIFT_ELEV), elev)
+            self.app_stage[i] = 1
+        if self.app_stage[i] == 1:
+            a, done = self._track(i, bend, self.app_high[i])
+            if done:
+                self.app_stage[i] = 2
+            return a
+        if self.app_stage[i] == 2:
+            a, done = self._track(i, self.app_bend[i], self.app_high[i])
+            if done:
+                self.app_stage[i] = 3
+            return a
+        if self.app_stage[i] == 3:
+            a, done = self._track(i, self.app_bend[i], self.app_elev[i])
+            if done:
+                self.app_stage[i] = 4
+            return a
+        self.timer[i] += 1                                  # settle: fresh image of the pre-insertion pose
+        if self.timer[i] >= SETTLE_STEPS:
+            self._start_insert(i)
+        return np.zeros(7)
 
     def _start_insert(self, i):
         self.phase[i], self.timer[i] = INSERT, 0

@@ -47,6 +47,11 @@ for _i in range(1, 16):
         SEG_COLLIDERS[_i] = (0.0244, -0.002, TIP_OFFSET)
 TIP_DISC_RADIUS = 0.0244
 
+# Eye-in-hand camera on Seg15 (vision_env.py): on the tip axis, looking out of the tip face
+CAM_WIDTH = CAM_HEIGHT = 160
+CAM_FOV_DEG = 120.0                   # wide-angle endoscope camera
+CAM_OFFSET = TIP_OFFSET + 0.0005      # camera centre 0.5 mm outside the tip face
+
 # ---------------------------------------------------------------------------
 # Control
 # ---------------------------------------------------------------------------

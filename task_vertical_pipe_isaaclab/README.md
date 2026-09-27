@@ -27,7 +27,10 @@ Videos (policy trained in MuJoCo, run in Isaac Sim): [12 random pipes, two-panel
 | `vision_env.py` | the env + an RGB-D camera on the tip (Seg15); the policy can see the camera's pipe estimate instead of the true pose |
 | `perception.py` | pipe-mouth detector: yellow collar mask + depth -> 3D points -> circle fit (centre, height, quality) |
 | `vision_pipeline.py` | look / lift / conical scan with the tip camera, return to the start pose, then the RL policy inserts |
-| `play_vision.py` | statistics (vision vs true pose, sensor noise) and MP4 with the tip-camera view |
+| `play_vision.py` | statistics (vision vs true pose, sensor noise, `--student`) and MP4 with the tip-camera view |
+| `preinsert.py`, `student_env.py` | pre-insertion hand-over poses (pipe in view) and the student's training starts |
+| `student_policy.py`, `train_student.py` | image-based student (CNN on the tip RGB-D image + joint commands) and its DAgger training |
+| `make_showcase_video.py` | 1080p project video: title cards + MuJoCo / tip-camera / student clips + results |
 | `tests/compare_with_mujoco.py` | checks against the MuJoCo env (runs in the MuJoCo venv) |
 | `tests/check_isaac_env.py` | checks of the Isaac env, replay of MuJoCo trajectories in PhysX |
 | `assets/mjcf/ContinuumRobot_Native.xml` | source MJCF (copy of `urdf/ContinuumRobot_Native.xml`) |
@@ -275,10 +278,67 @@ from pixels to actions. Limits of this step:
   continuum robot the tip pose itself has kinematic errors;
 - the noise model is independent Gaussian noise per pixel; the policy was not trained with
   estimation errors.
-Next steps: a student policy that acts from the tip images directly (teacher-student distillation of
-the current policy, DAgger), then a language-conditioned target choice (several pipes, a VLM picks
-the one named in the instruction), and finally a VLA fine-tuned on (image, instruction, action)
-demonstrations generated with these policies in Isaac Lab.
+Next steps: the image-based student below, then a language-conditioned target choice (several
+pipes, a VLM picks the one named in the instruction), and finally a VLA fine-tuned on (image,
+instruction, action) demonstrations generated with these policies in Isaac Lab.
+
+## Image-based student: insertion from pixels (teacher-student distillation)
+
+The pipeline above still gives the PPO policy a pipe *pose*. The student policy
+(`student_policy.StudentPolicy`) gets none: its input is the tip camera (RGB + depth, 64 x 64) and
+the robot's own commands (bend vectors, elevator, previous action), its output the 7-D action. It is
+trained with DAgger (`train_student.py`) to reproduce the privileged PPO policy (the teacher, which
+reads the true pipe pose) on the states the student itself visits.
+
+![Student: whole rig + tip camera + joint gauge](media/isaac_student_wide.png)
+
+Video: [the same 8 random pipes as above (seed 1), inserted by the student](media/isaac_student_wide.mp4)
+(8/8 success). Project video with all stages: [showcase.mp4](media/showcase.mp4).
+
+```cmd
+%ISAAC% train_student.py --num_envs 64 --iterations 150 --meshes        :: 614k steps, 18 min
+%ISAAC% play_vision.py --student models\student_vpipeinal.pt --meshes --episodes 100
+%ISAAC% play_vision.py --student models\student_vpipeinal.pt --video --pipe-mode random --episodes 8 --seed 1
+%ISAAC% make_showcase_video.py                                           :: videos\showcase.mp4 (no Isaac Sim needed)
+```
+
+Hand-over: from the task's start pose the tip camera sees the pipe in only ~20-45 % of the episodes,
+and a policy without a pipe pose cannot know which way to go when it sees nothing. So the search of
+the pipeline above is kept (it uses the detector only to put the pipe in view), and the robot then
+goes to a **pre-insertion pose** (`preinsert.preinsert_pose`): the S-curve partly formed towards the
+estimated pipe (0.6-1.0 x the aligned bend, section 3 straight), the tip 3-5 cm above the mouth, the
+smallest such pose from which the camera sees >= 60 % of the collar ring and that does not touch the
+pipe; the robot goes up first, then bends, then down. These poses are inside the teacher's training
+distribution (its assisted starts), so its labels are good there.
+
+Training (`train_student.py`): 64 envs with the CAD frame / plate / robot in view; starts from
+`preinsert.StudentStartSampler` (75 %: pre-insertion poses computed from a pipe estimate with up to
+6 mm / 3 mm xy / z error and 0.02 rad bend noise, >= 40 % of the true ring in view; 25 %: normal task
+starts that already see the pipe); each episode driven by the teacher with probability beta (1 -> 0
+over 10 iterations), every state stored with the teacher's action (250k ring buffer), MSE with
+random-shift augmentation, Adam 3e-4. The network: 4 stride-2 convolutions on RGB-D + pixel
+coordinates, 256-unit MLP with the 14 joint-command inputs. From iteration 15 on (~65k samples) the
+student succeeds in 100 % of the episodes it drives; the teacher also reaches 100 % from these starts.
+
+Full pipeline (search -> pre-insertion pose -> student), 100 episodes per scene and setting:
+
+| success rate (rig / random) | seed 9000 | seed 1 |
+|---|---|---|
+| student, CAD meshes in view (as trained) | 100 % / 100 % | 100 % / 100 % |
+| student, depth noise 5 mm, colour noise 0.05 (not trained with noise) | 100 % / 100 % | |
+| student, colliders only in view (other background than trained) | 100 % / 100 % | |
+| for comparison: PPO + camera estimate from the start pose (section above) | 100 % / 99 % | 100 % / 96 % |
+| for comparison: PPO with the true pose from the start pose | 100 % / 99 % | 100 % / 95 % |
+
+Read the comparison rows with care: the student starts inserting from the pre-insertion pose, which
+is easier than the task's start pose (the teacher also succeeds 100 % from there). What the table
+shows is that the student **matches its privileged teacher from pixels and joint commands alone**;
+the gain over the rows below comes from the hand-over pose, not from the student being better than
+the teacher. A successful episode takes 3.7-5.1 s (search and approach 1.9-2.9 s on average).
+
+Still missing for the real robot: the search and the hand-over still use the colour-marker detector;
+the student was trained on one pipe look (colour, lighting) without domain randomisation; the camera
+images are rendered, not real.
 
 ## Notes
 

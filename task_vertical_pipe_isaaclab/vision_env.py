@@ -31,12 +31,10 @@ from isaaclab.utils.math import matrix_from_quat
 
 import constants as C
 import mdp
+from constants import CAM_FOV_DEG, CAM_HEIGHT, CAM_OFFSET, CAM_WIDTH
 from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg, VerticalPipeSceneCfg
 
-CAM_WIDTH = CAM_HEIGHT = 160
-CAM_FOV_DEG = 120.0                       # wide-angle endoscope camera
 CAM_FOCAL = 10.0                          # mm (USD units); only the ratio focal / aperture matters
-CAM_OFFSET = C.TIP_OFFSET + 0.0005        # camera centre 0.5 mm outside the tip face, on the tip axis
 
 
 @configclass
