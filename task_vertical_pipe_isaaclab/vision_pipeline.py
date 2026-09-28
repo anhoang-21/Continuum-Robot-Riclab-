@@ -97,6 +97,7 @@ class SearchInsertController:
         self.app_elev = np.zeros(n)
         self.app_high = np.zeros(n)
         self.app_stage = np.zeros(n, dtype=int)
+        self.obstacles = [[] for _ in range(n)]          # other pipes the pre-insertion pose must not touch
         self.reset(range(n))
 
     # ------------------------------------------------------------------
@@ -267,7 +268,8 @@ class SearchInsertController:
                 self.phase[i], self.timer[i] = RETURN, 0
             return
         d = self.last_det[i]
-        pose = preinsert_pose(self.env.kin, d.pipe_xy, d.z_top, float(self.env.bore_length[i]))
+        pose = preinsert_pose(self.env.kin, d.pipe_xy, d.z_top, float(self.env.bore_length[i]),
+                              obstacles=self.obstacles[i])
         if pose is None:                                    # no pre-insertion pose: start from the start pose
             self.app_bend[i], self.app_elev[i] = self.start_bend[i], self.start_elev[i]
         else:

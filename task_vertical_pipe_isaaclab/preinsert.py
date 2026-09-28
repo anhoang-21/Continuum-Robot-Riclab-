@@ -50,8 +50,12 @@ def view_fraction(kin, bend, elev, pipe_xy, z_top, n=32, margin=0.95):
     return float(ok.mean())
 
 
-def preinsert_pose(kin, pipe_xy, z_top, bore_length, heights=PREINSERT_HEIGHTS, fractions=PREINSERT_FRACTIONS):
-    """(bend (3, 2), elev) of the first pre-insertion pose that sees the pipe and does not touch it, or None."""
+def preinsert_pose(kin, pipe_xy, z_top, bore_length, heights=PREINSERT_HEIGHTS, fractions=PREINSERT_FRACTIONS,
+                   obstacles=()):
+    """
+    (bend (3, 2), elev) of the first pre-insertion pose that sees the pipe and does not touch it, or None.
+    obstacles: other pipes [(pipe_xy, z_top, bore_length), ...] the pose must not touch either.
+    """
     aligned = kin.aligned_bend(pipe_xy)
     for h in heights:
         for f in fractions:
@@ -64,6 +68,8 @@ def preinsert_pose(kin, pipe_xy, z_top, bore_length, heights=PREINSERT_HEIGHTS, 
                 continue
             xpos, xmat = kin.forward(kin.qpos_from(bend, elev))
             if kin.pipe_overlap(xpos, xmat, pipe_xy, z_top, bore_length):
+                continue
+            if any(kin.pipe_overlap(xpos, xmat, o_xy, o_z, o_bore) for o_xy, o_z, o_bore in obstacles):
                 continue
             return bend, float(elev)
     return None

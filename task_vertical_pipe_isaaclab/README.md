@@ -30,7 +30,11 @@ Videos (policy trained in MuJoCo, run in Isaac Sim): [12 random pipes, two-panel
 | `play_vision.py` | statistics (vision vs true pose, sensor noise, `--student`) and MP4 with the tip-camera view |
 | `preinsert.py`, `student_env.py` | pre-insertion hand-over poses (pipe in view) and the student's training starts |
 | `student_policy.py`, `train_student.py` | image-based student (CNN on the tip RGB-D image + joint commands) and its DAgger training |
-| `make_showcase_video.py` | 1080p project video: title cards + MuJoCo / tip-camera / student clips + results |
+| `multi_pipe.py`, `multi_pipe_env.py` | Stage 5 scenes: 3 pipes of different tube colours, an instruction, an overview camera |
+| `vlm.py` | local VLM (Qwen3-VL-2B): instruction + overview image -> box; HTTP server / client |
+| `language_pipeline.py`, `play_language.py` | instruction -> VLM -> pipe -> pre-insertion pose -> image-based student; statistics / MP4 |
+| `make_grounding_set.py`, `eval_grounding.py` | grounding benchmark: rendered scenes with ground truth, VLM accuracy without Isaac Sim |
+| `make_showcase_video.py` | 1080p project video: title cards + MuJoCo / tip-camera / student / language clips + results |
 | `tests/compare_with_mujoco.py` | checks against the MuJoCo env (runs in the MuJoCo venv) |
 | `tests/check_isaac_env.py` | checks of the Isaac env, replay of MuJoCo trajectories in PhysX |
 | `assets/mjcf/ContinuumRobot_Native.xml` | source MJCF (copy of `urdf/ContinuumRobot_Native.xml`) |
@@ -290,15 +294,15 @@ the robot's own commands (bend vectors, elevator, previous action), its output t
 trained with DAgger (`train_student.py`) to reproduce the privileged PPO policy (the teacher, which
 reads the true pipe pose) on the states the student itself visits.
 
-![Student: whole rig + tip camera + joint gauge](media/isaac_student_wide.png)
+![Student: scene + tip camera](media/isaac_student.png)
 
-Video: [the same 8 random pipes as above (seed 1), inserted by the student](media/isaac_student_wide.mp4)
-(8/8 success). Project video with all stages: [showcase.mp4](media/showcase.mp4).
+Video: [the same 8 random pipes as above (seed 1), inserted by the student](media/isaac_student.mp4)
+(8/8 success; same scene view as the tip-camera video above). Project video with all stages: [showcase.mp4](media/showcase.mp4).
 
 ```cmd
 %ISAAC% train_student.py --num_envs 64 --iterations 150 --meshes        :: 614k steps, 18 min
 %ISAAC% play_vision.py --student models\student_vpipeinal.pt --meshes --episodes 100
-%ISAAC% play_vision.py --student models\student_vpipeinal.pt --video --pipe-mode random --episodes 8 --seed 1
+%ISAAC% play_vision.py --student models\student_vpipeinal.pt --video --view close --pipe-mode random --episodes 8 --seed 1
 %ISAAC% make_showcase_video.py                                           :: videos\showcase.mp4 (no Isaac Sim needed)
 ```
 
@@ -339,6 +343,74 @@ the teacher. A successful episode takes 3.7-5.1 s (search and approach 1.9-2.9 s
 Still missing for the real robot: the search and the hand-over still use the colour-marker detector;
 the student was trained on one pipe look (colour, lighting) without domain randomisation; the camera
 images are rendered, not real.
+
+## Stage 5: language-conditioned insertion with a local VLM (hierarchical VLA)
+
+Three pipes stand in the robot's reach, each with a different tube colour (red, green, blue, purple,
+white, black; the yellow collar stays on all of them). An instruction names one of them by colour
+("Go through the red pipe.") or by its place in the overview image ("Insert into the pipe on the far
+left.", "Go through the pipe closest to the camera."). The robot has to go through that pipe; the
+other two are obstacles (touching them counts as a failure).
+
+![Stage 5: scene, overview camera with the VLM box, tip camera](media/isaac_language.png)
+
+Video: [8 instructions, 8/8 through the named pipe](media/isaac_language.mp4) (red box: the VLM's
+answer, green ring: the pipe located in it). The VLM answer takes ~6 s on the CPU; the video does not
+show that wait.
+
+Pipeline (`language_pipeline.LanguageInsertController`):
+1. a fixed **overview camera** on the rig (RGB-D, 640 x 480, inside the frame in front of the robot)
+   sees the table;
+2. **Qwen3-VL-2B-Instruct** (Apache-2.0, 2B parameters, runs locally with `transformers`; no API, no
+   tokens) gets the image and the instruction and answers with a box (`vlm.py`);
+3. every pipe mouth in the overview image is located in 3D (collar mask, depth, circle fit:
+   3/3 pipes found in 60/60 test scenes, 0.54 mm median error); the one the box points at is the
+   target, the others are obstacles;
+4. the robot goes to the target's pre-insertion pose (clear of the other pipes) and the **image-based
+   student** threads it.
+
+The student was fine-tuned for these scenes (`train_student.py --multi --init models\student_vpipeinal.pt`,
+410k steps, 13 min): other pipes around, tube colour of the target random (25 % the original light
+blue). It succeeds in 100 % of the episodes it drives from iteration 10 on.
+
+```cmd
+%ISAAC% make_grounding_set.py --scenes 300                   :: rendered scenes + ground truth (data\grounding)
+%ISAAC% eval_grounding.py                                     :: VLM accuracy, no Isaac Sim
+%ISAAC% train_student.py --multi --init models\student_vpipeinal.pt --meshes --num_envs 64 --iterations 100 --beta-iters 3 --buffer 150000 --run-name student_multi
+%ISAAC% vlm.py --serve --device cpu                           :: the VLM in its own process (the 8 GB GPU is Isaac Sim's)
+%ISAAC% play_language.py --episodes 100 --vlm-url http://127.0.0.1:8765/ground
+%ISAAC% play_language.py --video --episodes 8 --seed 7100 --p-position 0.6 --vlm-url http://127.0.0.1:8765/ground   :: --view wide: whole rig
+```
+
+Grounding benchmark (`eval_grounding.py`, 300 rendered scenes, VLM on the GPU, 1.5 s per scene):
+
+| instructions | n | box on the right pipe | 3D pipe right |
+|---|---|---|---|
+| all | 300 | 86.3 % | 86.7 % |
+| colour | 171 | 90.1 % (black 100, red 97, green 93, purple 92, blue 85, white 77) | 90.1 % |
+| position: left / right | 70 | 93 % / 100 % | |
+| position: closest / farthest from the camera | 59 | 71 % / 57 % | |
+
+Left / right is easy for the 2B model, depth relations from a single image are not; the white pipe on
+the white table is the hardest colour. A longer prompt that explains the relations ("the pipe closest
+to the camera is the lowest in the image") made the position instructions worse: 81 % -> 43 %.
+
+Closed loop (`play_language.py`, 100 episodes, 3 pipes, VLM on the CPU in its own process):
+
+| | picks the right pipe | whole task | insertion when the right pipe was picked |
+|---|---|---|---|
+| all | 91 % | 90 % | 98.9 % |
+| colour instructions (66) | 92.4 % | 90.9 % | 98.4 % |
+| position instructions (34) | 88.2 % | 88.2 % | 100 % |
+
+9 of the 10 failures are grounding errors (the VLM chose another pipe, and the robot went through that
+one); 1 is a rim hit. The VLM needs 6.4 s per instruction on the CPU. Loading it on the GPU next to
+Isaac Sim (8 GB) made the renderer fail, hence the separate process.
+
+What this is: a **hierarchical vision-language-action system** (VLM for the language and the target,
+a learned visuomotor policy for the motion), not an end-to-end VLA model. Next step: an end-to-end
+VLA (e.g. SmolVLA) fine-tuned on (image, instruction, action) demonstrations generated with this
+pipeline.
 
 ## Notes
 

@@ -240,20 +240,23 @@ class VerticalPipeEnv(DirectRLEnv):
             joint.GetLocalPos0Attr().Set(Gf.Vec3f(*[float(v) for v in origins[i]]))
             joint.GetLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
 
+    # prims (under each env) whose contacts with the robot are measured
+    CONTACT_BODIES = ("Pipe",)
+
     def _make_contact_view(self):
         """
-        PhysX contact view: sensors = the 15 segments of every robot, filter = the pipe of the same env
-        (one sensor pattern per segment, each paired with the pipe pattern, so every sensor has exactly
-        one filter). The env of every sensor row is read from its prim path.
+        PhysX contact view: sensors = the 15 segments of every robot, filters = the pipe(s) of the same
+        env (CONTACT_BODIES; one sensor pattern per segment, each paired with the same filter patterns).
+        The env of every sensor row is read from its prim path.
         """
         from isaacsim.core.simulation_manager import SimulationManager
 
         ns = self.scene.env_regex_ns.replace(".*", "*")
         patterns = [f"{ns}/Robot/base_link/{name}" for name in SEG_NAMES]
-        filters = [[f"{ns}/Pipe"] for _ in SEG_NAMES]
+        filters = [[f"{ns}/{body}" for body in self.CONTACT_BODIES] for _ in SEG_NAMES]
         view = SimulationManager.get_physics_sim_view().create_rigid_contact_view(
             patterns, filter_patterns=filters, max_contact_data_count=64 * len(SEG_NAMES) * self.num_envs)
-        if view.sensor_count != len(SEG_NAMES) * self.num_envs or view.filter_count != 1:
+        if view.sensor_count != len(SEG_NAMES) * self.num_envs or view.filter_count != len(self.CONTACT_BODIES):
             raise RuntimeError(f"contact view: {view.sensor_count} sensors, {view.filter_count} filters")
 
         def env_of(path):
@@ -261,9 +264,9 @@ class VerticalPipeEnv(DirectRLEnv):
 
         row_env = [env_of(p) for p in view.sensor_paths]
         self._contact_row_body = [SEG_NAMES.index(p.rsplit("/", 1)[-1]) for p in view.sensor_paths]
-        for p, f in zip(view.sensor_paths, view.filter_paths):
-            if env_of(f[0]) != env_of(p):
-                raise RuntimeError(f"contact filter of {p} is {f[0]}")
+        for p, fs in zip(view.sensor_paths, view.filter_paths):
+            if any(env_of(f) != env_of(p) for f in fs):
+                raise RuntimeError(f"contact filters of {p} are {fs}")
         self._contact_view = view
         self._contact_row_env = torch.as_tensor(row_env, dtype=torch.long, device=self.device)
         self._contact_row_seg = torch.as_tensor(self._contact_row_body, dtype=torch.long, device=self.device)
@@ -287,6 +290,7 @@ class VerticalPipeEnv(DirectRLEnv):
         idx = starts[rows] + torch.arange(total, device=self.device) - first[rows]
         pts_w = points[idx]
         sep = separations[idx].view(-1)
+        rows = rows // len(self.CONTACT_BODIES)             # (sensor, filter) pair -> sensor
         env_ids = self._contact_row_env[rows]
         seg = self._contact_row_seg[rows]
 

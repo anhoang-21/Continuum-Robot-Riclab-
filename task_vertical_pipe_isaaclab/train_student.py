@@ -52,6 +52,11 @@ parser.add_argument("--meshes", action="store_true", help="CAD frame / plate / r
 parser.add_argument("--depth-noise", type=float, default=0.0)
 parser.add_argument("--rgb-noise", type=float, default=0.0)
 parser.add_argument("--save-every", type=int, default=25)
+parser.add_argument("--multi", action="store_true",
+                    help="Stage 5 scenes: 3 pipes with random tube colours around (multi_pipe_env.py)")
+parser.add_argument("--train-tube-prob", type=float, default=0.25,
+                    help="--multi: chance that the target keeps the light-blue tube of the single-pipe task")
+parser.add_argument("--init", type=str, default="", help="start from this student checkpoint")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
@@ -66,7 +71,7 @@ from torch.utils.tensorboard import SummaryWriter  # noqa: E402
 
 from pipe_runner import OUTCOMES  # noqa: E402
 from student_env import StudentPipeEnv, StudentPipeEnvCfg  # noqa: E402
-from student_policy import IMG, PROPRIO_DIM, StudentPolicy, save_student, student_inputs  # noqa: E402
+from student_policy import IMG, PROPRIO_DIM, StudentPolicy, load_student, save_student, student_inputs  # noqa: E402
 from vision_pipeline import load_actor  # noqa: E402
 
 
@@ -94,7 +99,17 @@ class Buffer:
 def main():
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
-    cfg = StudentPipeEnvCfg()
+    if args.multi:
+        from multi_pipe_env import MultiPipeEnv, MultiPipeEnvCfg
+
+        cfg = MultiPipeEnvCfg()
+        cfg.student_starts = True
+        cfg.overview = False
+        cfg.obs_source = "gt"
+        cfg.max_episode_steps = 400
+        cfg.train_tube_prob = args.train_tube_prob
+    else:
+        cfg = StudentPipeEnvCfg()
     cfg.scene.num_envs = args.num_envs
     cfg.seed = args.seed
     cfg.random_offset = (0.0, args.max_offset)
@@ -103,11 +118,12 @@ def main():
     cfg.depth_noise_std = args.depth_noise
     cfg.rgb_noise_std = args.rgb_noise
     cfg.sim.device = args.device
-    env = StudentPipeEnv(cfg)
+    env = MultiPipeEnv(cfg) if args.multi else StudentPipeEnv(cfg)
     dev, n = env.device, env.num_envs
 
     teacher = load_actor(os.path.join(TASK_DIR, args.teacher) if not os.path.isabs(args.teacher) else args.teacher)
-    student = StudentPolicy().to(dev)
+    student = load_student(os.path.join(TASK_DIR, args.init) if args.init and not os.path.isabs(args.init) else args.init,
+                           device=dev).train() if args.init else StudentPolicy().to(dev)
     opt = torch.optim.Adam(student.parameters(), lr=args.lr)
     buf = Buffer(args.buffer)
     out_dir = os.path.join(TASK_DIR, "models", args.run_name)

@@ -109,13 +109,14 @@ def coverage(xy, c):
 
 
 class PipeDetector:
-    def __init__(self, min_points=30, max_rms=0.004, min_coverage=0.2, max_range=0.5, median=5):
+    def __init__(self, min_points=30, max_rms=0.004, min_coverage=0.2, max_range=0.5, median=5, tube_check=True):
         """
         max_range (m): farther pixels are ignored (the robot's reach; other rigs in the scene are 2 m away).
         median: size of the median filter applied to the depth image (0 = none) against depth noise.
+        tube_check: pick the side of a short arc with the light-blue tube (off for coloured tubes).
         """
         self.min_points, self.max_rms, self.min_coverage = min_points, max_rms, min_coverage
-        self.max_range, self.median = max_range, median
+        self.max_range, self.median, self.tube_check = max_range, median, tube_check
 
     def _in_range(self, depth):
         return np.where(depth < self.max_range, depth, 0.0)
@@ -157,7 +158,8 @@ class PipeDetector:
         fits = [fit_circle_known_radius(xy, FIT_RADIUS, c_init) for c_init in cands]
 
         # tube points (bore wall below the collar): the right centre has them inside the collar
-        tube = backproject(depth, K, tube_mask(rgb)) @ cam_rot.T + cam_pos
+        tube = backproject(depth, K, tube_mask(rgb) if self.tube_check else np.zeros(depth.shape, bool))
+        tube = tube @ cam_rot.T + cam_pos
         tube = tube[(tube[:, 2] < z_top) & (tube[:, 2] > z_top - C.PIPE_HEIGHT - 0.01)]
 
         def score(fit):
@@ -169,3 +171,19 @@ class PipeDetector:
         cov = coverage(xy[keep], c)
         valid = (keep.sum() >= self.min_points) and (rms <= self.max_rms) and (cov >= self.min_coverage)
         return Detection(bool(valid), c, z_top, int(keep.sum()), rms, cov)
+
+
+def detect_all(detector, rgb, depth, K, cam_pos, cam_rot, min_pixels=60):
+    """Every pipe mouth in view: one detection per connected blob of collar pixels (valid ones only)."""
+    depth = np.where(depth < detector.max_range, depth, 0.0)
+    mask = (collar_mask(rgb) & (depth > 0.0)).astype(np.uint8)
+    mask = cv2.dilate(mask, np.ones((5, 5), np.uint8))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    found = []
+    for k in range(1, n):
+        if stats[k, cv2.CC_STAT_AREA] < min_pixels:
+            continue
+        det = detector.detect(rgb, np.where(labels == k, depth, 0.0), K, cam_pos, cam_rot)
+        if det.valid:
+            found.append(det)
+    return found
