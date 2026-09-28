@@ -42,6 +42,8 @@ parser.add_argument("--seed", type=int, default=9000)
 parser.add_argument("--max-offset", type=float, default=0.17, help="random scene: max pipe offset (m)")
 parser.add_argument("--max-steps", type=int, default=1000, help="episode limit (search + insertion)")
 parser.add_argument("--obs-source", choices=["vision", "gt"], default="vision")
+parser.add_argument("--student", type=str, default="",
+                    help="image-based student (train_student.py) inserts from a pre-insertion pose instead of the PPO policy")
 parser.add_argument("--depth-noise", type=float, default=0.0, help="std of the depth noise (m)")
 parser.add_argument("--rgb-noise", type=float, default=0.0, help="std of the colour noise (0..1)")
 parser.add_argument("--meshes", action="store_true",
@@ -183,10 +185,11 @@ def scene_panel(env, ctrl, i, ep, n_eps, step, finished):
     frame = cv2.resize(frame, (VIEW_W, VIEW_H))
     font = cv2.FONT_HERSHEY_SIMPLEX
     overlay = frame.copy()
-    cv2.rectangle(overlay, (10, 10), (560, 110), (18, 20, 26), -1)
+    cv2.rectangle(overlay, (10, 10), (650, 110), (18, 20, 26), -1)
     cv2.addWeighted(overlay, 0.72, frame, 0.28, 0, frame)
     info = env.info(i)
-    cv2.putText(frame, "Tip camera search + PPO insertion (Isaac Sim)", (20, 34), font, 0.55, (0, 230, 255), 1, cv2.LINE_AA)
+    title = "Tip camera search + image-based student policy (Isaac Sim)" if ctrl.student is not None         else "Tip camera search + PPO insertion (Isaac Sim)"
+    cv2.putText(frame, title, (20, 34), font, 0.55, (0, 230, 255), 1, cv2.LINE_AA)
     cv2.putText(frame, f"[{env.env_modes[i]}] episode {ep}/{n_eps}  step {step:4d}  t = {step * 0.02:5.2f} s",
                 (20, 60), font, 0.5, (230, 230, 230), 1, cv2.LINE_AA)
     cv2.putText(frame, f"tip offset {info['lat_mm']:5.1f} mm  depth {max(info['depth_mm'], 0):5.1f} mm  "
@@ -208,7 +211,14 @@ def run(actor, modes):
     video = args.video
     n = len(modes) if video else max(args.num_envs, len(modes))
     env = make_env(modes, n, render=video, meshes=video or args.meshes)
-    ctrl = SearchInsertController(env, actor, use_vision=args.obs_source == "vision")
+    student = None
+    if args.student:
+        from student_policy import load_student
+
+        path = args.student if os.path.isabs(args.student) else os.path.join(TASK_DIR, args.student)
+        student = load_student(path, device=env.device)
+    ctrl = SearchInsertController(env, actor, use_vision=args.obs_source == "vision" or student is not None,
+                                  student=student)
     env.auto_reset = False
     obs, _ = env.reset()
     ctrl.reset(range(n))
@@ -217,7 +227,8 @@ def run(actor, modes):
             env.render()
     writer, out = None, ""
     if video:
-        out = args.output or os.path.join(TASK_DIR, "videos", f"vision_{args.pipe_mode}_{args.view}.mp4")
+        tag = "student" if args.student else "vision"
+        out = args.output or os.path.join(TASK_DIR, "videos", f"{tag}_{args.pipe_mode}_{args.view}.mp4")
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
         writer = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), 25.0, (VIEW_W + CAM_PANEL, VIEW_H))
     results = {m: [] for m in modes}
@@ -265,7 +276,8 @@ def run(actor, modes):
 
 def report(results, wall):
     scene = "CAD meshes" if args.meshes or args.video else "colliders only"
-    print(f"\n=== obs source: {args.obs_source} | {scene} | depth noise {args.depth_noise * 1000:.1f} mm | "
+    policy = f"student {args.student}" if args.student else f"PPO, obs source {args.obs_source}"
+    print(f"\n=== insertion: {policy} | {scene} | depth noise {args.depth_noise * 1000:.1f} mm | "
           f"rgb noise {args.rgb_noise:.2f} | {wall:.0f} s ===")
     for mode, res in results.items():
         if not res:
