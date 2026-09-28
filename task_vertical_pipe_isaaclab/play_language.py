@@ -4,7 +4,7 @@ play_language.py - "Go through the red pipe": local VLM + image-based student (S
 ==============================================================================
     D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_language.py --episodes 100          # statistics
     D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_language.py --video --episodes 8    # MP4
-    D:\Isaacsim\env_isaaclab\Scripts\python.exe play_language.py --interactive        # window + your own instructions
+    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_language.py --interactive        # window + your own instructions
 
 Three pipes with different tube colours; each episode an instruction names one of them by
 colour or by position in the overview image. Qwen3-VL-2B (local) picks the pipe in the
