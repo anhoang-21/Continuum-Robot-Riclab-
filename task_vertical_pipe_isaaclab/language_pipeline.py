@@ -30,15 +30,20 @@ PHASE_NAMES = ("LOOK", "LIFT", "SCAN", "RETURN", "REFINE", "INSERT", "GIVE_UP", 
 
 
 class LanguageInsertController(SearchInsertController):
-    def __init__(self, env, student, ground_fn):
-        """ground_fn(image uint8 (H, W, 3), instruction) -> (box [x1, y1, x2, y2] or None, answer text, seconds)."""
+    def __init__(self, env, student, ground_fn, follow_choice=False):
+        """
+        ground_fn(image uint8 (H, W, 3), instruction) -> (box [x1, y1, x2, y2] or None, answer text, seconds).
+        follow_choice: free-form instructions (no ground truth): the pipe the VLM picked becomes the env's
+        target (MultiPipeEnv.retarget), grounding = "chosen".
+        """
         self.ground_fn = ground_fn
+        self.follow_choice = follow_choice
         self.ov_det = PipeDetector(max_range=1.5, tube_check=False)
         n = env.num_envs
         self.box = [None] * n
         self.answer = [""] * n
         self.vlm_seconds = np.zeros(n)
-        self.grounding = [""] * n                          # "right" | "wrong" | "none"
+        self.grounding = [""] * n                          # "right" | "wrong" | "none" | "chosen"
         super().__init__(env, actor=None, student=student)
 
     def reset(self, ids):
@@ -81,7 +86,11 @@ class LanguageInsertController(SearchInsertController):
         self.obstacles[i] = [(d.pipe_xy, d.z_top, float(env.bore_length[i])) for d in pipes
                              if np.linalg.norm(d.pipe_xy - target.pipe_xy) > 0.05]
         truth = [np.linalg.norm(sc.pipe_xy[j] - target.pipe_xy) for j in range(len(sc.colors))]
-        self.grounding[i] = "right" if int(np.argmin(truth)) == sc.target and min(truth) < 0.03 else "wrong"
+        if self.follow_choice:
+            env.retarget(i, int(np.argmin(truth)))
+            self.grounding[i] = "chosen"
+        else:
+            self.grounding[i] = "right" if int(np.argmin(truth)) == sc.target and min(truth) < 0.03 else "wrong"
         self._accept(i, target, "vlm")
         self._found(i)
 

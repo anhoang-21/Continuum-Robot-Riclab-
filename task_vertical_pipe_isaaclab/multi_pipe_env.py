@@ -159,6 +159,23 @@ class MultiPipeEnv(VisionPipeEnv):
                     if prim.IsValid():
                         UsdGeom.Gprim(prim).GetDisplayColorAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*rgb)]))
 
+    def retarget(self, i, j):
+        """
+        Make pipe j of env i's scene the target (a free-form instruction named another pipe than the
+        sampled one): the physical, contact-monitored "Pipe" and that pipe swap places and colours, so
+        success / failure are judged for pipe j. The robot must be at rest (it is put back at its commands).
+        """
+        sc = self.scenes[i]
+        if j == sc.target:
+            return
+        sc.target = j
+        bend = self.bend_cmd[i:i + 1].cpu().numpy()
+        elev = self.elev_cmd[i:i + 1].cpu().numpy()
+        self.set_start_state([i], sc.pipe_xy[j][None], [float(sc.z_top[j])], bend, elev)
+        self._place_distractors([i])
+        self._paint([i], self._rngs)
+        self.scene.write_data_to_sim()
+
     # ------------------------------------------------------------------
     def overview_camera(self):
         """rgb (N, H, W, 3) [0, 1], depth (N, H, W) m, K (3, 3), cam_pos (3,) and cam_rot (3, 3) in the env frame."""

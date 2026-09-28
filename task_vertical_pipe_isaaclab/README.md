@@ -378,6 +378,7 @@ blue). It succeeds in 100 % of the episodes it drives from iteration 10 on.
 %ISAAC% eval_grounding.py                                     :: VLM accuracy, no Isaac Sim
 %ISAAC% train_student.py --multi --init models\student_vpipeinal.pt --meshes --num_envs 64 --iterations 100 --beta-iters 3 --buffer 150000 --run-name student_multi
 %ISAAC% vlm.py --serve --device cpu                           :: the VLM in its own process (the 8 GB GPU is Isaac Sim's)
+%ISAAC% play_language.py --interactive                        :: Isaac Sim window, type your own instruction
 %ISAAC% play_language.py --episodes 100 --vlm-url http://127.0.0.1:8765/ground
 %ISAAC% play_language.py --video --episodes 8 --seed 7100 --p-position 0.6 --vlm-url http://127.0.0.1:8765/ground   :: --view wide: whole rig
 ```
@@ -406,6 +407,12 @@ Closed loop (`play_language.py`, 100 episodes, 3 pipes, VLM on the CPU in its ow
 9 of the 10 failures are grounding errors (the VLM chose another pipe, and the robot went through that
 one); 1 is a rim hit. The VLM needs 6.4 s per instruction on the CPU. Loading it on the GPU next to
 Isaac Sim (8 GB) made the renderer fail, hence the separate process.
+
+`--interactive`: one robot in the Isaac Sim window; the terminal lists the pipes on the table and
+asks for an instruction (Enter = the generated example, `n` = new scene, `q` = quit). Free-form
+instructions have no ground truth, so the pipe the VLM picks becomes the target
+(`MultiPipeEnv.retarget` swaps it with the contact-monitored pipe) and success is judged for it.
+The VLM runs on the CPU in the same process (~10 s per instruction; the window waits meanwhile).
 
 What this is: a **hierarchical vision-language-action system** (VLM for the language and the target,
 a learned visuomotor policy for the motion), not an end-to-end VLA model. Next step: an end-to-end

@@ -4,6 +4,7 @@ play_language.py - "Go through the red pipe": local VLM + image-based student (S
 ==============================================================================
     D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_language.py --episodes 100          # statistics
     D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_language.py --video --episodes 8    # MP4
+    D:\Isaacsim\env_isaaclab\Scripts\python.exe play_language.py --interactive        # window + your own instructions
 
 Three pipes with different tube colours; each episode an instruction names one of them by
 colour or by position in the overview image. Qwen3-VL-2B (local) picks the pipe in the
@@ -43,6 +44,8 @@ parser.add_argument("--vlm-device", default="cuda", help="where the VLM runs whe
 parser.add_argument("--vlm-url", default="", help="use a vlm.py --serve server, e.g. http://127.0.0.1:8765/ground")
 parser.add_argument("--p-position", type=float, default=0.5, help="share of position instructions")
 parser.add_argument("--video", action="store_true")
+parser.add_argument("--interactive", action="store_true",
+                    help="Isaac Sim window; type your own instruction in the terminal for each scene")
 parser.add_argument("--view", choices=["close", "wide"], default="close",
                     help="video scene view: close = near the pipes (as play_vision.py --view close), wide = whole rig")
 parser.add_argument("--output", type=str, default="")
@@ -53,7 +56,7 @@ if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
 args.enable_cameras = True
-args.headless = True
+args.headless = args.headless or not args.interactive
 app = AppLauncher(args).app
 
 import cv2  # noqa: E402
@@ -80,7 +83,7 @@ def make_env(n, render):
     cfg.seed = args.seed
     cfg.p_position = args.p_position
     cfg.sim.device = args.device
-    if render:
+    if render or args.interactive:
         cfg.viewer.resolution, cfg.viewer.lookat, cfg.viewer.eye = VIEW
     return MultiPipeEnv(cfg, render_mode="rgb_array" if render else None)
 
@@ -173,6 +176,62 @@ def frame(env, ctrl, i, ep, n_eps, step, result):
 
 
 # ---------------------------------------------------------------------------
+def interactive():
+    """One robot in the Isaac Sim window; the instruction comes from the terminal."""
+    if not args.vlm_url:
+        args.vlm_device = "cpu"                           # the GPU is the renderer's (8 GB)
+    ground = make_ground_fn()
+    env = make_env(1, render=False)
+    student = load_student(os.path.join(TASK_DIR, args.student) if not os.path.isabs(args.student) else args.student,
+                           device=env.device)
+    ctrl = LanguageInsertController(env, student, ground, follow_choice=True)
+    env.auto_reset = False
+    obs, _ = env.reset()
+    ctrl.reset([0])
+    for _ in range(10):                                   # show the scene before asking
+        obs, *_ = env.step(torch.zeros(1, 7, device=env.device))
+    ctrl.reset([0])
+    while app.is_running():
+        sc = env.scenes[0]
+        order = np.argsort(sc.image_x)
+        print("\nPipes on the table (left to right in the overview camera): "
+              + ", ".join(sc.colors[j] for j in order))
+        print(f"Example: \"{sc.instruction}\"")
+        text = input("Instruction (Enter = example, n = new scene, q = quit): ").strip()
+        if text.lower() == "q":
+            break
+        if text.lower() == "n":
+            obs = env.reset_envs([0])
+            ctrl.reset([0])
+            for _ in range(10):
+                obs, *_ = env.step(torch.zeros(1, 7, device=env.device))
+            ctrl.reset([0])
+            continue
+        if text:
+            sc.instruction = text
+        step, name = 0, ""
+        while not name and app.is_running():
+            obs, _, _, _, extras = env.step(ctrl.step_actions(obs))
+            step += 1
+            o = int(extras["done_info"]["outcome"][0])
+            if ctrl.phase[0] == GIVE_UP and o < 0:
+                name = "not_grounded"
+            elif o >= 0:
+                name = OUTCOMES[o]
+        chosen = sc.colors[sc.target] if ctrl.grounding[0] == "chosen" else "-"
+        print(f"VLM ({ctrl.vlm_seconds[0]:.1f} s): {_short_answer(ctrl.answer[0])} -> the {chosen} pipe | "
+              f"result: {name.upper()} after {step} steps ({step * 0.02:.1f} s)")
+        t_end = time.time() + 2.0                         # show the end pose
+        while time.time() < t_end and app.is_running():
+            env.sim.render()
+        obs = env.reset_envs([0])
+        ctrl.reset([0])
+        for _ in range(10):
+            obs, *_ = env.step(torch.zeros(1, 7, device=env.device))
+        ctrl.reset([0])
+    env.close()
+
+
 def main():
     ground = make_ground_fn()
     n = 1 if args.video else args.num_envs
@@ -251,5 +310,5 @@ def report(res, wall):
 
 if __name__ == "__main__":
     with torch.inference_mode():
-        main()
+        interactive() if args.interactive else main()
     app.close()
