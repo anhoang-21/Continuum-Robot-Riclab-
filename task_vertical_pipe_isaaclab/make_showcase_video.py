@@ -31,6 +31,10 @@ parser.add_argument("--language", default=os.path.join(TASK_DIR, "videos", "lang
                     help="play_language.py --video --view close (instruction -> local VLM -> student)")
 parser.add_argument("--output", default=os.path.join(TASK_DIR, "videos", "showcase.mp4"))
 parser.add_argument("--crf", type=int, default=24, help="x264 quality (lower = better, larger)")
+parser.add_argument("--stages45", action="store_true",
+                    help="short video with Stages 4 and 5 only; Stage 5 = the command-window demo (--ui-clip)")
+parser.add_argument("--ui-clip", default=os.path.join(TASK_DIR, "videos", "ui_demo.mp4"),
+                    help="record_ui_demo.py output (robot + RICLAB command window, 1920 x 1080)")
 args = parser.parse_args()
 
 W, H, FPS = 1920, 1080, 30
@@ -194,6 +198,65 @@ def clip(path, speed, overlay):
     return count, gen()
 
 
+def full_clip(path, speed=1.0):
+    """(frame count, generator) of a 1920 x 1080 clip shown as it is."""
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise FileNotFoundError(path)
+    src_fps, n = cap.get(cv2.CAP_PROP_FPS), int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    count = int(n / src_fps / speed * FPS)
+
+    def gen():
+        last, idx = None, -1
+        for k in range(count):
+            want = min(int(k / FPS * speed * src_fps), n - 1)
+            while idx < want:
+                ok, im = cap.read()
+                if not ok:
+                    break
+                idx += 1
+                last = im
+            yield last if last.shape[:2] == (H, W) else cv2.resize(last, (W, H), interpolation=cv2.INTER_AREA)
+
+    return count, gen()
+
+
+def title_card_45():
+    img, d = canvas()
+    d.text((160, 300), "From pixels and words", font=font("seguisb.ttf", 88), fill=WHITE)
+    d.text((160, 410), "to continuum-robot motion", font=font("seguisb.ttf", 88), fill=WHITE)
+    d.rectangle([160, 550, 400, 556], fill=ACCENT)
+    d.text((160, 590), "Stage 4  ·  visuomotor policy learned from the tip camera (teacher → student)",
+           font=font("segoeui.ttf", 38), fill=GREY)
+    d.text((160, 645), "Stage 5  ·  type an instruction, a local VLM picks the pipe, the policy threads it",
+           font=font("segoeui.ttf", 38), fill=GREY)
+    d.text((160, 720), "NVIDIA Isaac Sim / Isaac Lab  ·  Qwen3-VL-2B (local)  ·  RICLAB",
+           font=font("segoeui.ttf", 38), fill=ACCENT)
+    return to_bgr(img)
+
+
+def results_card_45():
+    img, d = canvas()
+    d.text((160, 150), "RESULTS", font=font("seguisb.ttf", 40), fill=ACCENT)
+    d.text((160, 210), "Isaac Sim, 100 episodes per setting", font=font("seguisb.ttf", 60), fill=WHITE)
+    rows = [("Stage 4 · image-based student (fixed / random pipe)", "100 % / 100 %", "also with 5 mm depth noise"),
+            ("Stage 5 · VLM picks the instructed pipe (3 pipes)", "91 %", "colour 92 %  ·  position 88 %"),
+            ("Stage 5 · whole task, instruction → through the pipe", "90 %", ""),
+            ("Stage 5 · insertion when the right pipe was picked", "98.9 %", "")]
+    y = 380
+    for label, value, note in rows:
+        d.text((160, y), label, font=font("segoeui.ttf", 38), fill=WHITE)
+        d.text((1150, y), value, font=font("seguisb.ttf", 40), fill=ACCENT)
+        d.text((1450, y + 6), note, font=font("segoeui.ttf", 26), fill=GREY)
+        y += 90
+        d.line([160, y - 20, 1760, y - 20], fill=LINE, width=2)
+    notes = ["Stage 4: the student starts from a pre-insertion pose (pipe in view), where its teacher also reaches 100 %",
+             "Stage 5: VLM Qwen3-VL-2B runs locally (6.4 s per instruction on the CPU); near / far is its weak spot"]
+    for k, t in enumerate(notes):
+        d.text((160, y + 20 + 50 * k), t, font=font("segoeui.ttf", 30), fill=GREY)
+    return to_bgr(img)
+
+
 def still(img, seconds):
     n = int(seconds * FPS)
     return n, (img for _ in range(n))
@@ -208,8 +271,29 @@ def with_fades(segment, fade=0.5):
         yield (fr * a + bg * (1 - a)).astype(np.uint8) if a < 1 else fr
 
 
+def segments_45():
+    return [
+        lambda: still(title_card_45(), 5),
+        lambda: still(section_card("STAGE 4", "Visuomotor policy learned from pixels", [
+            "Student CNN: tip RGB-D image (64 × 64) + joint commands  →  7 actions",
+            "No pipe pose at all during insertion",
+            "DAgger from the privileged PPO teacher: 614 k steps, 18 min on a laptop GPU",
+            "Search puts the pipe in view, the student threads it"]), 5),
+        lambda: clip(args.student, 1.5, caption("STAGE 4 · Isaac Sim",
+                                                "Image-based student   ·   left: scene, right: tip camera (all it sees of the pipe)")),
+        lambda: still(section_card("STAGE 5", "Type an instruction, the robot does it", [
+            "Three pipes; the instruction names one by colour or by position",
+            "Qwen3-VL-2B (local, no API) reads the overview image and picks the pipe",
+            "Overview depth locates it; the other pipes become obstacles",
+            "The image-based student threads the chosen pipe"]), 5),
+        lambda: full_clip(args.ui_clip, 1.0),
+        lambda: still(results_card_45(), 8),
+        lambda: still(next_card(), 7),
+    ]
+
+
 def main():
-    segments = [
+    segments = segments_45() if args.stages45 else [
         lambda: still(title_card(), 5),
         lambda: still(section_card("STAGE 1", "Reinforcement learning in MuJoCo", [
             "3-section cable-driven continuum robot + prismatic elevator",
