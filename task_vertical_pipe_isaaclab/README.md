@@ -31,7 +31,8 @@ Videos (policy trained in MuJoCo, run in Isaac Sim): [12 random pipes, two-panel
 | `preinsert.py`, `student_env.py` | pre-insertion hand-over poses (pipe in view) and the student's training starts |
 | `student_policy.py`, `train_student.py` | image-based student (CNN on the tip RGB-D image + joint commands) and its DAgger training |
 | `multi_pipe.py`, `multi_pipe_env.py` | Stage 5 scenes: 3 pipes of different tube colours, an instruction, an overview camera |
-| `vlm.py` | local VLM (Qwen3-VL-2B): instruction + overview image -> box; HTTP server / client |
+| `vlm.py` | local VLM (Qwen3-VL-2B, optional 4B): instruction + overview image -> box; HTTP server / client |
+| `command_panel.py` | RICLAB command window for `play_language.py --ui` |
 | `language_pipeline.py`, `play_language.py` | instruction -> VLM -> pipe -> pre-insertion pose -> image-based student; statistics / MP4 |
 | `make_grounding_set.py`, `eval_grounding.py` | grounding benchmark: rendered scenes with ground truth, VLM accuracy without Isaac Sim |
 | `make_showcase_video.py` | 1080p project video: title cards + MuJoCo / tip-camera / student / language clips + results |
@@ -379,6 +380,7 @@ blue). It succeeds in 100 % of the episodes it drives from iteration 10 on.
 %ISAAC% train_student.py --multi --init models\student_vpipeinal.pt --meshes --num_envs 64 --iterations 100 --beta-iters 3 --buffer 150000 --run-name student_multi
 %ISAAC% vlm.py --serve --device cpu                           :: the VLM in its own process (the 8 GB GPU is Isaac Sim's)
 %ISAAC% play_language.py --interactive                        :: Isaac Sim window, type your own instruction
+%ISAAC% play_language.py --ui                                 :: same, with the RICLAB command window (command_panel.py)
 %ISAAC% play_language.py --episodes 100 --vlm-url http://127.0.0.1:8765/ground
 %ISAAC% play_language.py --video --episodes 8 --seed 7100 --p-position 0.6 --vlm-url http://127.0.0.1:8765/ground   :: --view wide: whole rig
 ```
@@ -413,6 +415,11 @@ asks for an instruction (Enter = the generated example, `n` = new scene, `q` = q
 instructions have no ground truth, so the pipe the VLM picks becomes the target
 (`MultiPipeEnv.retarget` swaps it with the contact-monitored pipe) and success is judged for it.
 The VLM runs on the CPU in the same process (~10 s per instruction; the window waits meanwhile).
+`--ui`: the same with a small command window instead of the terminal (`command_panel.py`, Tkinter, white
+background with the RICLAB logo `assets/riclab_logo.png`): the pipes on the table as colour chips, an
+instruction box, one-click commands (each colour, leftmost / rightmost, new scene), the live state
+(phase, VLM box, chosen pipe, result) and the history. Models live in `D:\hf_models` (`HF_HOME`);
+`--vlm-model 2b` (default) or `4b`.
 
 What this is: a **hierarchical vision-language-action system** (VLM for the language and the target,
 a learned visuomotor policy for the motion), not an end-to-end VLA model. Next step: an end-to-end

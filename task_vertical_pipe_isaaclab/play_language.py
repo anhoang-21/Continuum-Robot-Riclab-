@@ -5,9 +5,10 @@ play_language.py - "Go through the red pipe": local VLM + image-based student (S
     D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_language.py --episodes 100          # statistics
     D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_language.py --video --episodes 8    # MP4
     D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_language.py --interactive        # window + your own instructions
+    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_language.py --ui                 # same, RICLAB command window
 
 Three pipes with different tube colours; each episode an instruction names one of them by
-colour or by position in the overview image. Qwen3-VL-2B (local) picks the pipe in the
+colour or by position in the overview image. Qwen3-VL (local) picks the pipe in the
 overview camera image, the overview depth locates it, the robot goes to its pre-insertion
 pose and the image-based student threads it (language_pipeline.py).
 
@@ -41,11 +42,14 @@ parser.add_argument("--episodes", type=int, default=100)
 parser.add_argument("--num_envs", "--num-envs", dest="num_envs", type=int, default=8)
 parser.add_argument("--seed", type=int, default=7000)
 parser.add_argument("--vlm-device", default="cuda", help="where the VLM runs when loaded in this process")
+parser.add_argument("--vlm-model", default="2b", help="2b | 4b (when loaded in this process)")
 parser.add_argument("--vlm-url", default="", help="use a vlm.py --serve server, e.g. http://127.0.0.1:8765/ground")
 parser.add_argument("--p-position", type=float, default=0.5, help="share of position instructions")
 parser.add_argument("--video", action="store_true")
 parser.add_argument("--interactive", action="store_true",
                     help="Isaac Sim window; type your own instruction in the terminal for each scene")
+parser.add_argument("--ui", action="store_true",
+                    help="like --interactive, with the RICLAB command window (command_panel.py) instead of the terminal")
 parser.add_argument("--view", choices=["close", "wide"], default="close",
                     help="video scene view: close = near the pipes (as play_vision.py --view close), wide = whole rig")
 parser.add_argument("--output", type=str, default="")
@@ -55,6 +59,7 @@ parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
+args.interactive = args.interactive or args.ui
 args.enable_cameras = True
 args.headless = args.headless or not args.interactive
 app = AppLauncher(args).app
@@ -95,7 +100,7 @@ def make_ground_fn():
         return lambda img, text: ground_http(img, text, url=args.vlm_url)
     from vlm import QwenGrounder
 
-    g = QwenGrounder(device=args.vlm_device)
+    g = QwenGrounder(args.vlm_model, device=args.vlm_device)
     print(f"VLM loaded in {g.load_s:.1f} s on {args.vlm_device}")
     return g.ground
 
@@ -118,7 +123,7 @@ def overview_panel(env, ctrl, i):
         pix = (env.overview.project(ring) * s).astype(np.int32)
         cv2.polylines(img, [pix], True, (0, 255, 0), 2, cv2.LINE_AA)
     cv2.rectangle(img, (0, 0), (PANEL_W, 78), (18, 20, 26), -1)
-    cv2.putText(img, "OVERVIEW CAMERA  +  Qwen3-VL-2B (local)", (14, 26), FONT, 0.6, (0, 230, 255), 1, cv2.LINE_AA)
+    cv2.putText(img, f"OVERVIEW CAMERA  +  Qwen3-VL-{args.vlm_model.upper()} (local)", (14, 26), FONT, 0.6, (0, 230, 255), 1, cv2.LINE_AA)
     cv2.putText(img, f'"{env.scenes[i].instruction}"', (14, 60), FONT, 0.75 if PANEL_W >= 720 else 0.62, (255, 255, 255), 2, cv2.LINE_AA)
     return img
 
@@ -177,38 +182,73 @@ def frame(env, ctrl, i, ep, n_eps, step, result):
 
 # ---------------------------------------------------------------------------
 def interactive():
-    """One robot in the Isaac Sim window; the instruction comes from the terminal."""
+    """
+    One robot in the Isaac Sim window; the instruction comes from the terminal, or with --ui from the
+    RICLAB command window (command_panel.py).
+    """
     if not args.vlm_url:
         args.vlm_device = "cpu"                           # the GPU is the renderer's (8 GB)
+    panel = None
+    if args.ui:
+        from command_panel import CommandPanel
+
+        panel = CommandPanel(model_name=f"Qwen3-VL-{args.vlm_model.upper()}")
+        panel.set_state(status="loading the VLM…")
     ground = make_ground_fn()
+    if panel is not None:
+        raw_ground = ground
+
+        def ground(img, text):                            # show that the VLM is thinking (the window waits)
+            panel.set_state(status="Qwen3-VL is thinking…", phase="LOCATE")
+            return raw_ground(img, text)
+
+        panel.set_state(status="starting Isaac Sim…")
     env = make_env(1, render=False)
     student = load_student(os.path.join(TASK_DIR, args.student) if not os.path.isabs(args.student) else args.student,
                            device=env.device)
     ctrl = LanguageInsertController(env, student, ground, follow_choice=True)
     env.auto_reset = False
-    obs, _ = env.reset()
-    ctrl.reset([0])
-    for _ in range(10):                                   # show the scene before asking
-        obs, *_ = env.step(torch.zeros(1, 7, device=env.device))
-    ctrl.reset([0])
-    while app.is_running():
+    zero = torch.zeros(1, 7, device=env.device)
+
+    def new_scene():
+        nonlocal obs
+        obs = env.reset_envs([0])
+        ctrl.reset([0])
+        for _ in range(10):                               # render the new scene before asking
+            obs, *_ = env.step(zero)
+        ctrl.reset([0])
         sc = env.scenes[0]
-        order = np.argsort(sc.image_x)
-        print("\nPipes on the table (left to right in the overview camera): "
-              + ", ".join(sc.colors[j] for j in order))
-        print(f"Example: \"{sc.instruction}\"")
-        text = input("Instruction (Enter = example, n = new scene, q = quit): ").strip()
-        if text.lower() == "q":
-            break
-        if text.lower() == "n":
-            obs = env.reset_envs([0])
-            ctrl.reset([0])
-            for _ in range(10):
-                obs, *_ = env.step(torch.zeros(1, 7, device=env.device))
-            ctrl.reset([0])
+        colors = [sc.colors[j] for j in np.argsort(sc.image_x)]
+        if panel is not None:
+            panel.set_pipes(colors, sc.instruction)
+            panel.set_state(status="ready: type an instruction", phase="-", box="-", chosen="-", result="-")
+        else:
+            print("\nPipes on the table (left to right in the overview camera): " + ", ".join(colors))
+            print(f"Example: \"{sc.instruction}\"")
+
+    obs, _ = env.reset()
+    new_scene()
+    while app.is_running():
+        if panel is not None:
+            text = None
+            while text is None and panel.alive and app.is_running():
+                text = panel.poll()
+                env.sim.render()
+            if not panel.alive:
+                break
+        else:
+            text = input("Instruction (Enter = example, n = new scene, q = quit): ").strip()
+            if text.lower() == "q":
+                break
+        if text in ("n", "__new__"):
+            new_scene()
             continue
+        sc = env.scenes[0]
         if text:
             sc.instruction = text
+        if panel is not None:
+            panel.set_busy(True)
+            panel.set_state(status="running", result="-")
         step, name = 0, ""
         while not name and app.is_running():
             obs, _, _, _, extras = env.step(ctrl.step_actions(obs))
@@ -218,17 +258,28 @@ def interactive():
                 name = "not_grounded"
             elif o >= 0:
                 name = OUTCOMES[o]
+            if panel is not None:
+                chosen = sc.colors[sc.target] if ctrl.grounding[0] == "chosen" else "-"
+                panel.set_state(phase=PHASE_NAMES[ctrl.phase[0]], box=_short_answer(ctrl.answer[0]),
+                                chosen=f"{chosen} ({ctrl.vlm_seconds[0]:.1f} s)" if chosen != "-" else "-",
+                                status=f"running · t = {step * 0.02:.1f} s")
         chosen = sc.colors[sc.target] if ctrl.grounding[0] == "chosen" else "-"
-        print(f"VLM ({ctrl.vlm_seconds[0]:.1f} s): {_short_answer(ctrl.answer[0])} -> the {chosen} pipe | "
-              f"result: {name.upper()} after {step} steps ({step * 0.02:.1f} s)")
+        result = "THROUGH THE PIPE!" if name == "success" else name.upper().replace("_", " ")
+        line = f"{sc.instruction}  →  {chosen}  →  {result} ({step * 0.02:.1f} s)"
+        if panel is not None:
+            panel.set_state(result=result, status="done")
+            panel.add_history(line)
+        else:
+            print(f"VLM ({ctrl.vlm_seconds[0]:.1f} s): {_short_answer(ctrl.answer[0])} -> the {chosen} pipe | "
+                  f"result: {name.upper()} after {step} steps ({step * 0.02:.1f} s)")
         t_end = time.time() + 2.0                         # show the end pose
         while time.time() < t_end and app.is_running():
             env.sim.render()
-        obs = env.reset_envs([0])
-        ctrl.reset([0])
-        for _ in range(10):
-            obs, *_ = env.step(torch.zeros(1, 7, device=env.device))
-        ctrl.reset([0])
+            if panel is not None:
+                panel.poll()
+        if panel is not None:
+            panel.set_busy(False)
+        new_scene()
     env.close()
 
 

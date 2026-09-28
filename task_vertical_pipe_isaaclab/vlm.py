@@ -1,9 +1,9 @@
 """
 ==============================================================================
-vlm.py - Language grounding with a local vision-language model (Qwen3-VL-2B)
+vlm.py - Language grounding with a local vision-language model (Qwen3-VL)
 ==============================================================================
 The instruction ("go through the red pipe", "the pipe on the far left", ...) and the
-overview camera image go to Qwen3-VL-2B-Instruct (Apache-2.0, runs locally through
+overview camera image go to Qwen3-VL-2B-Instruct (or 4B; Apache-2.0, runs locally through
 transformers, no API / tokens); it answers with a bounding box of the pipe it means.
 The box is turned into a 3D pipe estimate with the overview depth image: the collar
 pixels inside the box -> perception.PipeDetector (same circle fit as the tip camera).
@@ -24,11 +24,15 @@ import base64
 import io
 import json
 import re
+import os
 import time
 
 import numpy as np
 
-MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
+MODELS = {"2b": "Qwen/Qwen3-VL-2B-Instruct", "4b": "Qwen/Qwen3-VL-4B-Instruct"}
+MODEL_ID = MODELS["2b"]
+# downloaded models live under $HF_HOME/hub (default D:/hf_models, see README)
+CACHE_DIR = os.path.join(os.environ.get("HF_HOME", "D:/hf_models"), "hub")
 PROMPTS = {
     "v1": ("You see several pipes standing on a table; each has a yellow rim at its top opening. "
            "Instruction: \"{instruction}\"\n"
@@ -66,8 +70,11 @@ class QwenGrounder:
 
         t0 = time.time()
         self.device, self.prompt = device, prompt
-        self.processor = AutoProcessor.from_pretrained(model_id)
-        self.model = Qwen3VLForConditionalGeneration.from_pretrained(model_id, dtype=getattr(torch, dtype))
+        model_id = MODELS.get(model_id, model_id)
+        self.model_id = model_id
+        self.processor = AutoProcessor.from_pretrained(model_id, cache_dir=CACHE_DIR)
+        self.model = Qwen3VLForConditionalGeneration.from_pretrained(model_id, dtype=getattr(torch, dtype),
+                                                                     cache_dir=CACHE_DIR)
         self.model.to(device).eval()
         self.load_s = time.time() - t0
 
@@ -136,13 +143,13 @@ def ground_http(image, instruction, url="http://127.0.0.1:8765/ground", timeout=
     return box, ans["text"], ans["seconds"]
 
 
-def serve(port=8765, device="cuda"):
+def serve(port=8765, device="cuda", model=MODEL_ID):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     from PIL import Image
 
-    grounder = QwenGrounder(device=device)
-    print(f"{MODEL_ID} on {device}, loaded in {grounder.load_s:.1f} s; http://127.0.0.1:{port}/ground", flush=True)
+    grounder = QwenGrounder(model, device=device)
+    print(f"{grounder.model_id} on {device}, loaded in {grounder.load_s:.1f} s; http://127.0.0.1:{port}/ground", flush=True)
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -166,10 +173,11 @@ def serve(port=8765, device="cuda"):
 if __name__ == "__main__":
     import argparse
 
-    p = argparse.ArgumentParser(description="Local VLM grounding server (Qwen3-VL-2B)")
+    p = argparse.ArgumentParser(description="Local VLM grounding server (Qwen3-VL)")
     p.add_argument("--serve", action="store_true")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--device", default="cuda")
+    p.add_argument("--model", default="2b", help="2b | 4b | a Hugging Face id")
     a = p.parse_args()
     if a.serve:
-        serve(a.port, a.device)
+        serve(a.port, a.device, a.model)

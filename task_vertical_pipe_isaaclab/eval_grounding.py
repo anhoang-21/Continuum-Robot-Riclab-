@@ -5,7 +5,7 @@ eval_grounding.py - How well the local VLM picks the instructed pipe (Stage 5)
     D:\Isaacsim\env_isaaclab\Scripts\python.exe eval_grounding.py            # data/grounding, GPU
     D:\Isaacsim\env_isaaclab\Scripts\python.exe eval_grounding.py --device cpu --limit 50
 
-For every scene of make_grounding_set.py: Qwen3-VL-2B gets the overview image and the
+For every scene of make_grounding_set.py: Qwen3-VL (2B or 4B) gets the overview image and the
 instruction and answers with a box. Scored:
   box      the box contains the target's mouth (projected with the known camera) and no
            other mouth is nearer to the box centre
@@ -35,6 +35,7 @@ from vlm import PROMPTS, QwenGrounder, select_in_box  # noqa: E402
 parser = argparse.ArgumentParser(description="VLM grounding accuracy on the multi-pipe overview images")
 parser.add_argument("--data", default=os.path.join(TASK_DIR, "data", "grounding"))
 parser.add_argument("--device", default="cuda")
+parser.add_argument("--model", default="2b", help="2b | 4b | a Hugging Face id")
 parser.add_argument("--limit", type=int, default=0)
 parser.add_argument("--prompt", default="v1", choices=["v1", "v2"])
 parser.add_argument("--kind", default="", help="only this instruction kind (color / position)")
@@ -50,7 +51,7 @@ def main():
         rows = [r for r in rows if r["kind"] == args.kind]
     if args.limit:
         rows = rows[:args.limit]
-    grounder = QwenGrounder(device=args.device, prompt=PROMPTS[args.prompt])
+    grounder = QwenGrounder(args.model, device=args.device, prompt=PROMPTS[args.prompt])
     print(f"model loaded in {grounder.load_s:.1f} s on {args.device}; {len(rows)} scenes", flush=True)
     out = open(os.path.join(args.data, f"results{args.tag}.jsonl"), "w", encoding="utf-8")
     stats = {}
