@@ -415,6 +415,8 @@ asks for an instruction (Enter = the generated example, `n` = new scene, `q` = q
 instructions have no ground truth, so the pipe the VLM picks becomes the target
 (`MultiPipeEnv.retarget` swaps it with the contact-monitored pipe) and success is judged for it.
 The VLM runs on the CPU in the same process (~10 s per instruction; the window waits meanwhile).
+Demo video of the command window (robot + typed instructions, 4/4 through the named pipe) with Stage 4: [linkedin_stage45.mp4](media/linkedin_stage45.mp4) (`record_ui_demo.py`, then `make_showcase_video.py --stages45`).
+
 `--ui`: the same with a small command window instead of the terminal (`command_panel.py`, Tkinter, white
 background with the RICLAB logo `assets/riclab_logo.png`): the pipes on the table as colour chips, an
 instruction box, one-click commands (each colour, leftmost / rightmost, new scene), the live state
