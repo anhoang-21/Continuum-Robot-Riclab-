@@ -57,6 +57,14 @@ parser.add_argument("--checkpoint-freq", type=int, default=200_000, help="Checkp
 parser.add_argument("--stop-at", type=int, default=0,
                     help="Stop after this many steps; the learning-rate schedule still spans --timesteps (0 = off)")
 parser.add_argument("--viewer", action="store_true", help="Open the Isaac Sim window (training runs headless by default)")
+parser.add_argument("--actuation", choices=["joint", "cable"], default="joint",
+                    help="joint = position-controlled joints (bend commands); cable = real tendon drive, the policy "
+                         "commands the 6 lead-screw motors + elevator (cable_env.py; default run name ppo_vpipe_cable)")
+parser.add_argument("--cable-stiffness", type=float, default=None, help="cable: N/m of the cable path (default 2e4)")
+parser.add_argument("--cable-preload", type=float, default=None, help="cable: preload tension (N) of every cable (default 5)")
+parser.add_argument("--backbone-stiffness", type=float, default=None,
+                    help="cable: passive joint spring (N m/rad per joint, default 2)")
+parser.add_argument("--obs-tension", action="store_true", help="cable: observe the 6 cable-pair tension differences (39-dim obs)")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")      # PhysX GPU pipeline (the CPU pipeline is not supported, see README)
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
@@ -69,6 +77,7 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 
 from agent_cfg import make_agent_cfg, num_iterations  # noqa: E402
 from pipe_runner import PipeRunner  # noqa: E402
+from cable_env import CableVerticalPipeEnv, CableVerticalPipeEnvCfg  # noqa: E402
 from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg  # noqa: E402
 
 
@@ -78,6 +87,10 @@ def env_modes(pipe_mode):
 
 def main():
     # never overwrite a trained model (same rule as the MuJoCo trainer)
+    if args.actuation == "cable" and args.run_name == "ppo_vpipe":
+        args.run_name = "ppo_vpipe_cable"
+    if args.actuation == "cable" and args.resume:
+        print("note: --resume needs a checkpoint trained with the same actuation (the action / observation meaning differs)")
     run_name, suffix = args.run_name, 1
     while any(os.path.exists(os.path.join(TASK_DIR, "models", run_name, f)) for f in ("best_model.pt", "final_model.pt")):
         suffix += 1
@@ -89,7 +102,15 @@ def main():
     os.makedirs(models_dir, exist_ok=True)
     os.makedirs(logs_dir, exist_ok=True)
 
-    cfg = VerticalPipeEnvCfg()
+    cfg = CableVerticalPipeEnvCfg() if args.actuation == "cable" else VerticalPipeEnvCfg()
+    if args.actuation == "cable":
+        if args.cable_stiffness is not None:
+            cfg.cable_stiffness = args.cable_stiffness
+        if args.cable_preload is not None:
+            cfg.cable_preload = args.cable_preload
+        if args.backbone_stiffness is not None:
+            cfg.backbone_stiffness = args.backbone_stiffness
+        cfg.obs_tension = args.obs_tension
     cfg.scene.num_envs = args.n_envs
     cfg.pipe_modes = env_modes(args.pipe_mode)
     cfg.max_episode_steps = args.max_episode_steps
@@ -102,6 +123,8 @@ def main():
 
     print("=" * 75)
     print("PPO (rsl_rl) TRAINING - CONTINUUM ROBOT THROUGH A VERTICAL PIPE - ISAAC LAB")
+    print(f"  Actuation       : {args.actuation}" + (" (6 lead-screw motors + elevator, cable tension model)"
+                                                       if args.actuation == "cable" else " (joint position targets)"))
     print(f"  Scenes          : {args.pipe_mode} ({modes.count('rig')} rig / {modes.count('random')} random envs)")
     print(f"  Timesteps       : {args.timesteps:,}  |  episode <= {args.max_episode_steps} steps x 20 ms "
           f"(dt 2 ms x decimation 10)")
@@ -112,7 +135,7 @@ def main():
     print(f"  Logs   -> {logs_dir}   (tensorboard --logdir {os.path.join(TASK_DIR, 'logs')})")
     print("=" * 75)
 
-    env = RslRlVecEnvWrapper(VerticalPipeEnv(cfg))
+    env = RslRlVecEnvWrapper((CableVerticalPipeEnv if args.actuation == "cable" else VerticalPipeEnv)(cfg))
     agent_cfg = make_agent_cfg(args.n_envs, args.timesteps, gamma=args.gamma, seed=args.seed)
     runner = PipeRunner(env, agent_cfg, log_dir=logs_dir, device=args.ppo_device, models_dir=models_dir,
                         eval_freq=args.eval_freq, n_eval_episodes=20, checkpoint_freq=args.checkpoint_freq)
