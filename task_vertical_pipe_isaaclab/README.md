@@ -36,6 +36,8 @@ Videos (policy trained in MuJoCo, run in Isaac Sim): [12 random pipes, two-panel
 | `language_pipeline.py`, `play_language.py` | instruction -> VLM -> pipe -> pre-insertion pose -> image-based student; statistics / MP4 |
 | `make_grounding_set.py`, `eval_grounding.py` | grounding benchmark: rendered scenes with ground truth, VLM accuracy without Isaac Sim |
 | `make_showcase_video.py` | 1080p project video: title cards + MuJoCo / tip-camera / student / language clips + results |
+| `cable_model.py`, `cable_env.py` | tendon drive: 12 cables through the disc holes, tension from the cable stretch, forces on the discs in PhysX; env with the 6 lead-screw motors as action |
+| `tests/check_cable_model.py`, `tests/check_cable_env.py` | cable geometry vs `K_to_Length_3Seg` (numpy only) / cable env checks in Isaac Sim |
 | `tests/compare_with_mujoco.py` | checks against the MuJoCo env (runs in the MuJoCo venv) |
 | `tests/check_isaac_env.py` | checks of the Isaac env, replay of MuJoCo trajectories in PhysX |
 | `assets/mjcf/ContinuumRobot_Native.xml` | source MJCF (copy of `urdf/ContinuumRobot_Native.xml`) |
@@ -115,6 +117,39 @@ Checked (`tests/`):
   |---|---|---|
   | rig | 99 % success (1 rim hit), 2.39 s, clearance median 4.0 mm, 100 % without wall contact | 100 %, 2.4 s, 4.0 mm, 100 % |
   | random 0-17 cm | 99 % (1 rim hit), 1.86 s, clearance median 5.9 mm, 81 % without wall contact | 99 % (1 rim hit), 83 % |
+
+## Cable-driven mode (`--actuation cable`)
+
+The joint env sets the 30 joint angles directly. `cable_env.CableVerticalPipeEnv` simulates the mechanism
+of the real robot instead: 6 lead-screw motors, each pulling an antagonistic **pair of cables** (angle
+`alpha` and `alpha + 180 deg`; two motors 90 deg apart per section; hole radius 40 / 30 / 20 mm). The cables of
+section 2 run through the discs of section 1 (anchor Seg10), those of section 3 through sections 1 and 2
+(anchor Seg15), as in `constants.K_to_Length_3Seg`.
+
+| | |
+|---|---|
+| cable path | polyline through one hole in the discs of Elevator_Link, Seg1 .. anchor; length = sum of the straight pieces (exact, from the PhysX link poses, every 2 ms) |
+| motor | lead-screw displacement `s`: free length `L0 - s` (+ cable) / `L0 + s` (- cable); moves linearly inside the 20 ms env step |
+| tension | `T = max(0, k (L - L_free) + c dL/dt)`, `k` 2e4 N/m, `c` 150 N s/m, preload 5 N: a cable only pulls |
+| force on the robot | every piece pulls its two end discs together: force + torque about the COM of each body (`apply_forces_and_torques_at_position`); the sum over the robot is zero |
+| joints | passive: weak backbone spring (2 N m/rad, rest = start pose) + damping 0.5; the bend comes from the cables, the wall contact and the backbone |
+| action (7) | speed of the 6 motors in section order (S1 0 / 90 deg, S2 150 / 240 deg, S3 30 / 300 deg) + elevator; full action = the same section bend rate as the joint env (0.32 / 0.36 / 0.32 mm per step) |
+| observation | the 33 numbers of the joint env (the bend entries = bend of the motor positions), `--obs-tension`: + 6 cable-pair tension differences (39) |
+| reward / termination / resets | unchanged; at reset the motors are set to the exact cable geometry of the start pose (both cables of a pair just at preload) |
+
+```cmd
+%ISAAC% tests\check_cable_model.py                          :: numpy only: geometry vs K_to_Length_3Seg, force signs
+%ISAAC% tests\check_cable_env.py                            :: PhysX: geometry, hold, one motor pulled, force balance, random actions
+%ISAAC% train_vertical_pipe.py --actuation cable             :: -> models\ppo_vpipe_cable (start from scratch: other action space)
+%ISAAC% train_vertical_pipe.py --actuation cable --stop-at 200000    :: short run
+%ISAAC% play_vertical_pipe.py --actuation cable --draw-cables        :: window: the 12 cables drawn, brightness = tension
+%ISAAC% play_vertical_pipe.py --actuation cable --headless --episodes 100
+```
+
+Parameters (`CableVerticalPipeEnvCfg`) are estimates, not identified on the robot: cable stiffness / damping /
+preload, backbone stiffness. If the robot vibrates, lower `cable_stiffness` or use `sim.dt = 1 ms`, `decimation = 20`.
+Not modelled: cable friction in the holes / sheaths, cable slack beyond the one-way spring, motor dynamics
+(the screws follow the command exactly). `vision_env`, the student and the language pipeline still use the joint env.
 
 ## MJCF -> USD
 
