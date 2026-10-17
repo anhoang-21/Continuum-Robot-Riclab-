@@ -2,7 +2,7 @@
 ==============================================================================
 convert_mjcf_to_usd.py - MJCF -> USD for the vertical-pipe task (step 3 of the port)
 ==============================================================================
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe convert_mjcf_to_usd.py [--mesh-dir DIR] [--no-visual]
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe convert_mjcf_to_usd.py [--mesh-dir DIR] [--no-visual]
 
 1. Builds the MJCF that the MuJoCo env actually simulates. vertical_pipe_env.py edits
    urdf/ContinuumRobot_Native.xml in code (MjSpec): the collision copies of the meshes

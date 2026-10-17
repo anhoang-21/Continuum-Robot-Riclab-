@@ -44,7 +44,7 @@ Videos (policy trained in MuJoCo, run in Isaac Sim): [12 random pipes, two-panel
 
 ```cmd
 cd D:\Continuum-Robot-Riclab-\task_vertical_pipe_isaaclab
-set ISAAC=D:\Isaacsim\env_isaaclab\Scripts\python.exe
+set ISAAC=D:\Isaacsim\env_isaacsim62\Scripts\python.exe
 
 :: 0. (optional) engine-independent parts vs the MuJoCo env, writes tests/data/mujoco_reference.npz
 D:\mujoco\Continuum_MuJoCo\.venv\Scripts\python.exe tests\compare_with_mujoco.py

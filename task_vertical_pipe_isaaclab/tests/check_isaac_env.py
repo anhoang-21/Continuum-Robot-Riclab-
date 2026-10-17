@@ -2,7 +2,7 @@
 ==============================================================================
 check_isaac_env.py - Checks of the Isaac Lab env (step 6 of the port)
 ==============================================================================
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe tests/check_isaac_env.py
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe tests/check_isaac_env.py
 
 Run tests/compare_with_mujoco.py first (MuJoCo venv); it writes the reference
 trajectories replayed here.

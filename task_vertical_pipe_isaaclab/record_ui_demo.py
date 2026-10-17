@@ -2,7 +2,7 @@
 ==============================================================================
 record_ui_demo.py - Stage 5 demo video: robot (left) + RICLAB command window (right)
 ==============================================================================
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe record_ui_demo.py --episodes 4
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe record_ui_demo.py --episodes 4
 
 1920 x 1080 MP4: on the left the robot in Isaac Sim (the viewer camera of the Isaac window,
 eye (0.62, -0.42, 0.86) -> target (0.09, 0.21, 0.58)), on the right the command window of

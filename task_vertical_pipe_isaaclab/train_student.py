@@ -2,8 +2,8 @@
 ==============================================================================
 train_student.py - DAgger: image-based student from the privileged PPO teacher
 ==============================================================================
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe train_student.py
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe train_student.py --num_envs 32 --iterations 150 --meshes
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe train_student.py
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe train_student.py --num_envs 32 --iterations 150 --meshes
 
 Every iteration: all envs run for --steps-per-iter steps; each episode is driven by the
 teacher with probability beta (1 in the first iteration, down to 0 after --beta-iters

@@ -2,7 +2,7 @@
 ==============================================================================
 make_grounding_set.py - Overview images + instructions with ground truth (Stage 5)
 ==============================================================================
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe make_grounding_set.py --scenes 300
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe make_grounding_set.py --scenes 300
 
 Renders multi-pipe scenes (multi_pipe_env.py, CAD rig in view) and saves, per scene:
 data/grounding/<k>.png (overview RGB), <k>_depth.npz (overview depth, float16) and one line
