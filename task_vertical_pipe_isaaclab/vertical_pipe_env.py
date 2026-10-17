@@ -76,13 +76,37 @@ def scene_view_cfg(eye=VIEW_EYE, lookat=VIEW_LOOKAT, resolution=VIEW_RESOLUTION,
                             background_color=None, headless=headless)
 
 
+def kit_visualizer(env):
+    """The Kit visualizer of scene_view_cfg() (None without one)."""
+    return next((viz for viz in env.sim.visualizers if viz.cfg.visualizer_type == "kit"), None)
+
+
 def scene_frame(env):
     """RGB image (H, W, 3) uint8 of the scene_view_cfg() camera (env.render() returns no image in Isaac Lab 3)."""
     env.render()
-    for viz in env.sim.visualizers:
-        if viz.cfg.visualizer_type == "kit":
-            return viz.render_rgb_array()
-    raise RuntimeError("no Kit visualizer: add scene_view_cfg() to cfg.sim.visualizer_cfgs")
+    viz = kit_visualizer(env)
+    if viz is None:
+        raise RuntimeError("no Kit visualizer: add scene_view_cfg() to cfg.sim.visualizer_cfgs")
+    return viz.render_rgb_array()
+
+
+def set_scene_view(env, env_index=None, eye=None, lookat=None, world=False):
+    """
+    Move the scene_view_cfg() camera (Isaac Lab 3 replacement of env.viewport_camera_controller):
+    env_index = look at that env (eye / lookat in its frame), world = eye / lookat in world coordinates.
+    """
+    viz = kit_visualizer(env)
+    if viz is None:
+        return
+    if world:
+        viz.cfg.origin_type = "world"
+    elif env_index is not None:
+        viz.cfg.origin_type, viz.cfg.origin_env_index = "env", int(env_index)
+    if eye is not None:
+        viz.cfg.eye = tuple(float(v) for v in eye)
+    if lookat is not None:
+        viz.cfg.lookat = tuple(float(v) for v in lookat)
+    viz.reapply_origin()
 
 
 @configclass

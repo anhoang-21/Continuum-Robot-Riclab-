@@ -36,6 +36,8 @@ sys.path.insert(0, TASK_DIR)
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
+from app_launch import launcher_args  # noqa: E402
+
 parser = argparse.ArgumentParser(description="Language-conditioned pipe insertion with a local VLM")
 parser.add_argument("--student", type=str, default=os.path.join("models", "student_multi", "final.pt"))
 parser.add_argument("--episodes", type=int, default=100)
@@ -65,10 +67,7 @@ args, _ = parser.parse_known_args()
 if args.cable and args.student == parser.get_default("student"):
     args.student = os.path.join("models", "student_multi_cable", "final.pt")
 args.interactive = args.interactive or args.ui
-# Isaac Lab 3: no --headless / --enable_cameras flags; the window opens only with a Kit visualizer
-# (scene_view_cfg in make_env), and the launcher's own "video" option is not --video of this script
-app = AppLauncher({**vars(args), "enable_cameras": True, "headless": not args.interactive, "video": False,
-                   "visualizer_intent": {"has_kit_visualizer": args.interactive}}).app
+app = AppLauncher(launcher_args(args, gui=args.interactive)).app   # window: scene_view_cfg in make_env
 
 import cv2  # noqa: E402
 
@@ -78,6 +77,7 @@ from multi_pipe_env import MultiPipeEnv, MultiPipeEnvCfg  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
 from student_policy import load_student  # noqa: E402
 from vertical_pipe_env import scene_frame, scene_view_cfg  # noqa: E402
+from video_io import Mp4Writer  # noqa: E402
 from vision_pipeline import GIVE_UP  # noqa: E402
 
 # scene camera (resolution, lookat, eye) and width of the right column, per --view (same views as play_vision.py)
@@ -108,22 +108,6 @@ def make_env(n, render):
             lookat, eye = (0.10, 0.20, 1.05), (1.10, 1.25, 1.40)
         cfg.sim.visualizer_cfgs = [scene_view_cfg(eye, lookat, resolution, headless=not args.interactive)]
     return (CableMultiPipeEnv if args.cable else MultiPipeEnv)(cfg)
-
-
-class Mp4Writer:
-    """H.264 MP4 through imageio-ffmpeg (the OpenCV of env_isaacsim62 has no video I/O); write() takes BGR frames."""
-
-    def __init__(self, path, fps, size):
-        import imageio_ffmpeg
-
-        self._gen = imageio_ffmpeg.write_frames(path, size, fps=fps, codec="libx264", pix_fmt_out="yuv420p")
-        self._gen.send(None)
-
-    def write(self, bgr):
-        self._gen.send(np.ascontiguousarray(bgr[..., ::-1]))
-
-    def release(self):
-        self._gen.close()
 
 
 def make_ground_fn():
