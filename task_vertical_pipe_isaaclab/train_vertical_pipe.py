@@ -38,6 +38,9 @@ from isaaclab.app import AppLauncher  # noqa: E402
 parser = argparse.ArgumentParser(description="PPO (rsl_rl): continuum robot moves down through a vertical pipe")
 parser.add_argument("--timesteps", type=int, default=3_000_000, help="Total training steps (default 3M)")
 parser.add_argument("--n-envs", type=int, default=16, help="Parallel environments (default 16, as the MuJoCo trainer)")
+parser.add_argument("--steps-per-env", type=int, default=0,
+                    help="rollout length per env and update (default 512 = SB3 n_steps; with many envs use "
+                         "8192 / n-envs to keep 8192 samples per update, e.g. --n-envs 128 --steps-per-env 64)")
 parser.add_argument("--pipe-mode", choices=["rig", "random", "mixed"], default="mixed",
                     help="rig = pipe on the plate hole, random = pipe anywhere in reach, mixed = both")
 parser.add_argument("--max-episode-steps", type=int, default=400, help="Steps per episode (20 ms each)")
@@ -57,6 +60,11 @@ parser.add_argument("--checkpoint-freq", type=int, default=200_000, help="Checkp
 parser.add_argument("--stop-at", type=int, default=0,
                     help="Stop after this many steps; the learning-rate schedule still spans --timesteps (0 = off)")
 parser.add_argument("--viewer", action="store_true", help="Open the Isaac Sim window (training runs headless by default)")
+parser.add_argument("--cable", action="store_true",
+                    help="cable-driven robot (cable_env.py): 6 lead-screw motors pull 12 cables, no joint servos")
+parser.add_argument("--action-mode", choices=["motor", "bend"], default="motor",
+                    help="--cable: motor = the policy drives the 6 motors, bend = bend rates + the lab's cable formula")
+parser.add_argument("--no-gravity", action="store_true", help="--cable: no gravity on the arm")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")      # PhysX GPU pipeline (the CPU pipeline is not supported, see README)
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
@@ -67,8 +75,9 @@ app = AppLauncher(args).app
 
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 
-from agent_cfg import make_agent_cfg, num_iterations  # noqa: E402
+from agent_cfg import N_STEPS, make_agent_cfg, num_iterations  # noqa: E402
 from pipe_runner import PipeRunner  # noqa: E402
+from cable_env import CableVerticalPipeEnv, CableVerticalPipeEnvCfg  # noqa: E402
 from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg  # noqa: E402
 
 
@@ -89,7 +98,10 @@ def main():
     os.makedirs(models_dir, exist_ok=True)
     os.makedirs(logs_dir, exist_ok=True)
 
-    cfg = VerticalPipeEnvCfg()
+    cfg = CableVerticalPipeEnvCfg() if args.cable else VerticalPipeEnvCfg()
+    if args.cable:
+        cfg.action_mode = args.action_mode
+        cfg.gravity = not args.no_gravity
     cfg.scene.num_envs = args.n_envs
     cfg.pipe_modes = env_modes(args.pipe_mode)
     cfg.max_episode_steps = args.max_episode_steps
@@ -99,21 +111,25 @@ def main():
     cfg.seed = args.seed
     cfg.sim.device = args.device
     modes = [cfg.pipe_modes[i % len(cfg.pipe_modes)] for i in range(args.n_envs)]
+    n_steps = args.steps_per_env or N_STEPS
 
     print("=" * 75)
     print("PPO (rsl_rl) TRAINING - CONTINUUM ROBOT THROUGH A VERTICAL PIPE - ISAAC LAB")
+    print(f"  Robot           : " + (f"cable-driven, {args.action_mode} actions, gravity {not args.no_gravity}"
+                                     if args.cable else "joint servos (bend commands)"))
     print(f"  Scenes          : {args.pipe_mode} ({modes.count('rig')} rig / {modes.count('random')} random envs)")
     print(f"  Timesteps       : {args.timesteps:,}  |  episode <= {args.max_episode_steps} steps x 20 ms "
           f"(dt 2 ms x decimation 10)")
     print(f"  Assisted starts : {args.assist:.0%} of training episodes (eval: 0%)")
     print(f"  Wall contact    : -{args.contact_penalty} per step  |  random pipe offset <= {args.max_offset * 100:.0f} cm")
+    print(f"  Rollout         : {args.n_envs} envs x {n_steps} steps = {args.n_envs * n_steps:,} samples per update")
     print(f"  Devices         : PPO {args.ppo_device} | PhysX {cfg.sim.device}")
     print(f"  Models -> {models_dir}")
     print(f"  Logs   -> {logs_dir}   (tensorboard --logdir {os.path.join(TASK_DIR, 'logs')})")
     print("=" * 75)
 
-    env = RslRlVecEnvWrapper(VerticalPipeEnv(cfg))
-    agent_cfg = make_agent_cfg(args.n_envs, args.timesteps, gamma=args.gamma, seed=args.seed)
+    env = RslRlVecEnvWrapper(CableVerticalPipeEnv(cfg) if args.cable else VerticalPipeEnv(cfg))
+    agent_cfg = make_agent_cfg(args.n_envs, args.timesteps, gamma=args.gamma, seed=args.seed, n_steps=n_steps)
     runner = PipeRunner(env, agent_cfg, log_dir=logs_dir, device=args.ppo_device, models_dir=models_dir,
                         eval_freq=args.eval_freq, n_eval_episodes=20, checkpoint_freq=args.checkpoint_freq)
     runner.add_git_repo_to_log(__file__)
@@ -124,7 +140,7 @@ def main():
                     map_location=args.ppo_device)
         runner.alg.set_schedule(1e-4, 1e-5, args.timesteps)
 
-    iterations = num_iterations(args.stop_at or args.timesteps, args.n_envs)
+    iterations = num_iterations(args.stop_at or args.timesteps, args.n_envs, n_steps)
     start = time.time()
     try:
         runner.learn(num_learning_iterations=iterations)
@@ -137,7 +153,8 @@ def main():
     best_path = os.path.join(models_dir, "best_model.pt")
     if not os.path.exists(best_path):
         best_path = os.path.join(models_dir, "final_model.pt")
-    print(f"Watch it:  D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe play_vertical_pipe.py --checkpoint {best_path}")
+    cable = f" --cable --action-mode {args.action_mode}" if args.cable else ""
+    print(f"Watch it:  D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe play_vertical_pipe.py --checkpoint {best_path}{cable}")
 
 
 if __name__ == "__main__":

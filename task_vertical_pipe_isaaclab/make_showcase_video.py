@@ -35,6 +35,10 @@ parser.add_argument("--stages45", action="store_true",
                     help="short video with Stages 4 and 5 only; Stage 5 = the command-window demo (--ui-clip)")
 parser.add_argument("--ui-clip", default=os.path.join(TASK_DIR, "videos", "ui_demo.mp4"),
                     help="record_ui_demo.py output (robot + RICLAB command window, 1920 x 1080)")
+parser.add_argument("--cable-project", action="store_true",
+                    help="video of the cable-driven robot project (record_cable_video.py clips + record_ui_demo.py --cable)")
+parser.add_argument("--results", default=os.path.join(TASK_DIR, "videos", "cable_results.json"),
+                    help="--cable-project: numbers of the results card (written by hand from the evaluations)")
 args = parser.parse_args()
 
 W, H, FPS = 1920, 1080, 30
@@ -292,8 +296,127 @@ def segments_45():
     ]
 
 
+# ---------------------------------------------------------------------------
+# Cable-driven robot project (not a "stage" of the joint-servo project)
+# ---------------------------------------------------------------------------
+def title_card_cable():
+    img, d = canvas()
+    d.text((160, 270), "Motors, lead screws, cables:", font=font("seguisb.ttf", 84), fill=WHITE)
+    d.text((160, 375), "RL for a cable-driven continuum robot", font=font("seguisb.ttf", 84), fill=WHITE)
+    d.rectangle([160, 515, 400, 521], fill=ACCENT)
+    d.text((160, 555), "The drive of the real robot, simulated: 6 stepper motors turn lead screws, the nuts pull 12 cables",
+           font=font("segoeui.ttf", 34), fill=GREY)
+    d.text((160, 605), "Reinforcement learning commands the motors - no joint servos",
+           font=font("segoeui.ttf", 34), fill=GREY)
+    d.text((160, 690), "NVIDIA Isaac Sim / Isaac Lab  ·  PPO  ·  visuomotor student  ·  Qwen3-VL-2B (local)  ·  RICLAB",
+           font=font("segoeui.ttf", 34), fill=ACCENT)
+    return to_bgr(img)
+
+
+def drive_card():
+    img, d = canvas()
+    d.text((160, 170), "THE DRIVE", font=font("seguisb.ttf", 40), fill=ACCENT)
+    d.text((160, 230), "Motor  →  lead screw  →  nut  →  cable  →  arm", font=font("seguisb.ttf", 68), fill=WHITE)
+    rows = [("6 Ezi-Servo steppers", "EzM-42M (0.44 N m) / EzM-56M (1.0 N m), closed loop, torque limit over speed"),
+            ("8 mm lead screws", "thread friction: 60 % efficient driving, 42 % back-driven; the nut sticks at standstill"),
+            ("12 cables, 3 sections", "each nut winds one cable in and pays its antagonist out; through 5 / 10 / 15 discs"),
+            ("cable physics", "one-sided tension (slack possible), pre-tension, elastic cardan backbone, gravity"),
+            ("coupling", "cables of the upper sections also bend the lower ones - emerges from the physics")]
+    y = 380
+    for tag, text in rows:
+        d.text((160, y), tag, font=font("seguisb.ttf", 36), fill=ACCENT)
+        d.text((640, y + 2), text, font=font("segoeui.ttf", 32), fill=WHITE)
+        y += 82
+    d.text((160, y + 30), "Checked in PhysX: statics = cable model within 0.1 deg per joint",
+           font=font("segoeui.ttf", 30), fill=GREY)
+    return to_bgr(img)
+
+
+def rl_card(res):
+    return section_card("REINFORCEMENT LEARNING ON THE MOTORS", "The policy drives 6 motors + the elevator", [
+        "Action: 6 motor speeds + elevator speed (no joint targets, no cable formula)",
+        "Observation: pipe + arm state, the 6 motor encoders",
+        f"PPO, 128 parallel robots on one laptop GPU: {res['ppo_train']}",
+        f"Learns the cable coupling, elasticity and gravity by itself: {res['ppo_success']}"])
+
+
+def student_card(res):
+    return section_card("FROM PIXELS", "Tip camera + motor encoders → 6 motor speeds", [
+        "Image-based student (CNN), no pipe pose: tip RGB-D image + the 6 motor encoders",
+        f"DAgger from the PPO teacher on the motors: {res['student_train']}",
+        "Tip camera search → pre-insertion pose → the student threads the pipe",
+        f"Success: {res['student_success']}"])
+
+
+def language_card_cable(res):
+    return section_card("LANGUAGE", "Type an instruction, the motors do it", [
+        "Three pipes; the instruction names one by colour or by position",
+        "Qwen3-VL-2B (local, no API) picks the pipe in the overview image",
+        "The image-based student on the 6 motors threads it",
+        f"Whole task: {res['language_success']}"])
+
+
+def results_card_cable(res):
+    img, d = canvas()
+    d.text((160, 140), "RESULTS", font=font("seguisb.ttf", 40), fill=ACCENT)
+    d.text((160, 200), "Cable-driven robot in Isaac Sim", font=font("seguisb.ttf", 60), fill=WHITE)
+    y = 350
+    for label, value, note in res["rows"]:
+        d.text((160, y), label, font=font("segoeui.ttf", 36), fill=WHITE)
+        d.text((1120, y), value, font=font("seguisb.ttf", 38), fill=ACCENT)
+        d.text((1440, y + 6), note, font=font("segoeui.ttf", 26), fill=GREY)
+        y += 84
+        d.line([160, y - 20, 1760, y - 20], fill=LINE, width=2)
+    for k, t in enumerate(res.get("notes", [])):
+        d.text((160, y + 16 + 46 * k), t, font=font("segoeui.ttf", 30), fill=GREY)
+    return to_bgr(img)
+
+
+def next_card_cable():
+    img, d = canvas()
+    d.text((160, 230), "NEXT", font=font("seguisb.ttf", 40), fill=ACCENT)
+    d.text((160, 290), "Towards the real robot", font=font("seguisb.ttf", 72), fill=WHITE)
+    items = [("Calibrate", "cable stiffness, pre-tension, backbone spring from motor currents and IMUs"),
+             ("Sim2Real", "the policy already outputs motor commands: same interface as the robot's drivers"),
+             ("Robust", "domain randomization of the drive parameters, friction in the routing discs")]
+    y = 460
+    for tag, t in items:
+        d.text((160, y), tag, font=font("seguisb.ttf", 42), fill=ACCENT)
+        d.text((430, y + 4), t, font=font("segoeui.ttf", 36), fill=WHITE)
+        y += 84
+    d.rectangle([160, 800, 1760, 802], fill=LINE)
+    d.text((160, 830), "Code: " + GITHUB, font=font("consola.ttf", 36), fill=GREY)
+    return to_bgr(img)
+
+
+def segments_cable():
+    import json
+
+    with open(args.results, encoding="utf-8") as f:
+        res = json.load(f)
+    v = lambda name: os.path.join(TASK_DIR, "videos", name)  # noqa: E731
+    return [
+        lambda: still(title_card_cable(), 5),
+        lambda: still(drive_card(), 7),
+        lambda: clip(v("cable_demo.mp4"), 1.5, caption("THE DRIVE · Isaac Sim",
+                                                        "Each motor turns its lead screw; the nut winds a cable in")),
+        lambda: still(rl_card(res), 6),
+        lambda: clip(v("cable_ppo.mp4"), 1.0, caption("RL ON THE MOTORS · Isaac Sim",
+                                                       "PPO commands the 6 motors: right, the screws, nuts and cable tensions")),
+        lambda: still(student_card(res), 6),
+        lambda: clip(v("cable_student.mp4"), 1.5, caption("FROM PIXELS · Isaac Sim",
+                                                           "Tip camera search, then the image-based student drives the motors")),
+        lambda: still(language_card_cable(res), 6),
+        lambda: full_clip(v("ui_demo_cable.mp4"), 1.0),
+        lambda: still(results_card_cable(res), 9),
+        lambda: still(next_card_cable(), 7),
+    ]
+
+
 def main():
-    segments = segments_45() if args.stages45 else [
+    if args.cable_project and args.output == parser.get_default("output"):
+        args.output = os.path.join(TASK_DIR, "videos", "linkedin_cable_robot.mp4")
+    segments = segments_cable() if args.cable_project else segments_45() if args.stages45 else [
         lambda: still(title_card(), 5),
         lambda: still(section_card("STAGE 1", "Reinforcement learning in MuJoCo", [
             "3-section cable-driven continuum robot + prismatic elevator",

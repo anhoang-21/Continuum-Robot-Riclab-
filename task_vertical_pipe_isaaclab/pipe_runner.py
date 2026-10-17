@@ -29,13 +29,16 @@ import torch
 from rsl_rl.runners import OnPolicyRunner
 from rsl_rl.utils import check_nan
 
+from train_viz import EpisodeRecorder, render_and_log_async
+
 OUTCOMES = ("success", "unstable", "rim_hit", "missed_pipe", "timeout")   # index = outcome code of the env
 
 
 class PipeRunner(OnPolicyRunner):
     def __init__(self, env, train_cfg, log_dir=None, device="cpu", models_dir=None,
-                 eval_freq=50_000, n_eval_episodes=20, checkpoint_freq=200_000, stats_window=200):
+                 eval_freq=50_000, n_eval_episodes=20, checkpoint_freq=200_000, stats_window=200, viz=True):
         super().__init__(env, train_cfg, log_dir=log_dir, device=device)
+        self.viz = viz                             # GIF of env 0 per evaluation in TensorBoard (train_viz.py)
         self.models_dir = models_dir
         self.eval_freq, self.n_eval_episodes, self.checkpoint_freq = eval_freq, n_eval_episodes, checkpoint_freq
         self.outcomes = deque(maxlen=stats_window)
@@ -97,6 +100,11 @@ class PipeRunner(OnPolicyRunner):
             env.set_eval(True)
             obs, _ = self.env.reset()
             obs = obs.to(self.device)
+            # first episode of the last env (always has an eval episode, see targets) -> GIF
+            rv = n - 1
+            rec = EpisodeRecorder(env, env_id=rv) if self.viz else None
+            if rec is not None:
+                rec.add(0)
             while (counts < targets).any():
                 actions = policy(obs, stochastic_output=not deterministic)
                 obs, rew, dones, extras = self.env.step(actions.to(self.env.device))
@@ -104,6 +112,11 @@ class PipeRunner(OnPolicyRunner):
                 cur_rew += rew.cpu()
                 cur_len += 1
                 outcome = extras["done_info"]["outcome"].cpu()
+                if rec is not None and rec.outcome is None:
+                    if bool(dones[rv]):
+                        rec.finish(outcome[rv])
+                    else:
+                        rec.add(int(cur_len[rv]))
                 for i in dones.nonzero().view(-1).cpu().tolist():
                     if counts[i] < targets[i]:
                         rewards.append(float(cur_rew[i]))
@@ -115,6 +128,7 @@ class PipeRunner(OnPolicyRunner):
             env.set_eval(False)
             env.restore(snapshot)
         self.alg.train_mode()
+        self._last_recording = rec
         return np.array(rewards), np.array(lengths), np.array(successes)
 
     def _run_eval(self) -> None:
@@ -131,6 +145,11 @@ class PipeRunner(OnPolicyRunner):
             self.logger.writer.add_scalar("eval/success_rate", float(successes.mean()), self.num_timesteps)
             np.savez(os.path.join(self.logger.log_dir, "evaluations.npz"),
                      **{k: np.array(v) for k, v in self.eval_log.items()})
+        rec = getattr(self, "_last_recording", None)
+        if rec is not None and rec.frames:
+            render_and_log_async(rec, self.logger.writer, self.num_timesteps,
+                                 os.path.join(self.logger.log_dir or ".", "viz"),
+                                 f"{self.num_timesteps:,} steps")
         best = ""
         if mean_r > self.best_mean_reward:
             self.best_mean_reward = mean_r

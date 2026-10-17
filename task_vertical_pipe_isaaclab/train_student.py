@@ -57,6 +57,9 @@ parser.add_argument("--multi", action="store_true",
 parser.add_argument("--train-tube-prob", type=float, default=0.25,
                     help="--multi: chance that the target keeps the light-blue tube of the single-pipe task")
 parser.add_argument("--init", type=str, default="", help="start from this student checkpoint")
+parser.add_argument("--cable", action="store_true",
+                    help="cable-driven robot (cable_stages.py): teacher and student command the 6 lead-screw motors; "
+                         "default teacher models/ppo_cable_128/best_model.pt")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
@@ -99,17 +102,29 @@ class Buffer:
 def main():
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
-    if args.multi:
+    StudentEnv, MultiEnv = StudentPipeEnv, None
+    if args.cable:
+        from cable_stages import TEACHER, CableMultiPipeEnv, CableMultiPipeEnvCfg, CableStudentPipeEnv, \
+            CableStudentPipeEnvCfg
+
+        StudentEnv, StudentCfg, MultiEnv, MultiCfg = CableStudentPipeEnv, CableStudentPipeEnvCfg, CableMultiPipeEnv, \
+            CableMultiPipeEnvCfg
+        if args.teacher == parser.get_default("teacher"):
+            args.teacher = TEACHER
+    else:
         from multi_pipe_env import MultiPipeEnv, MultiPipeEnvCfg
 
-        cfg = MultiPipeEnvCfg()
+        StudentCfg, MultiEnv, MultiCfg = StudentPipeEnvCfg, MultiPipeEnv, MultiPipeEnvCfg
+    print(f"teacher: {args.teacher} | {'cable-driven robot (6 motors)' if args.cable else 'joint-servo robot'}")
+    if args.multi:
+        cfg = MultiCfg()
         cfg.student_starts = True
         cfg.overview = False
         cfg.obs_source = "gt"
         cfg.max_episode_steps = 400
         cfg.train_tube_prob = args.train_tube_prob
     else:
-        cfg = StudentPipeEnvCfg()
+        cfg = StudentCfg()
     cfg.scene.num_envs = args.num_envs
     cfg.seed = args.seed
     cfg.random_offset = (0.0, args.max_offset)
@@ -118,7 +133,7 @@ def main():
     cfg.depth_noise_std = args.depth_noise
     cfg.rgb_noise_std = args.rgb_noise
     cfg.sim.device = args.device
-    env = MultiPipeEnv(cfg) if args.multi else StudentPipeEnv(cfg)
+    env = MultiEnv(cfg) if args.multi else StudentEnv(cfg)
     dev, n = env.device, env.num_envs
 
     teacher = load_actor(os.path.join(TASK_DIR, args.teacher) if not os.path.isabs(args.teacher) else args.teacher)

@@ -119,6 +119,15 @@ class SearchInsertController:
             self.phi0[i] = self.phi[i] = float(np.arctan2(lean[1], lean[0]))
         if not self.use_vision:
             self.env.clear_prev_action(list(ids))
+        self._drive(list(ids), policy=not self.use_vision)
+
+    def _drive(self, ids, policy):
+        """
+        Cable-driven robot (cable_env.py): the scripted phases act on bend commands (the env turns them into
+        motor targets), the policies on the 6 motors. No-op on the joint-servo robot.
+        """
+        if ids and hasattr(self.env, "set_drive_mode") and self.env.cfg.action_mode == "motor":
+            self.env.set_drive_mode(ids, bend=not policy)
 
     # ------------------------------------------------------------------
     def _track(self, i, bend_target, elev_target):
@@ -306,6 +315,7 @@ class SearchInsertController:
     def _start_insert(self, i):
         self.phase[i], self.timer[i] = INSERT, 0
         self.env.clear_prev_action([i])
+        self._drive([i], policy=True)
         self._refresh = True
 
     # ------------------------------------------------------------------

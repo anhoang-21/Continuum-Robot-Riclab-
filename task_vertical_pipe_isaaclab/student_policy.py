@@ -3,8 +3,9 @@
 student_policy.py - Image-based insertion policy (the "student")
 ==============================================================================
 Input: the tip camera (RGB + depth, 64 x 64) and the robot's own commands
-(bend vectors 6, elevator 1, previous action 7). No pipe pose. Output: the 7-D
-action of the task (bend-vector rates + elevator rate).
+(bend vectors 6 - or on the cable-driven robot the 6 motor encoders -, elevator 1,
+previous action 7). No pipe pose. Output: the 7-D action of the task (bend-vector
+rates, or the 6 motor speeds, + elevator rate).
 
 Trained by DAgger (train_student.py) to reproduce the privileged PPO policy (the
 "teacher", which reads the true pipe pose) from the states the student itself visits.
@@ -36,8 +37,9 @@ def student_inputs(env):
     x = F.interpolate(x, size=(IMG, IMG), mode="area")
     img = (x.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8)
     n = env.num_envs
-    proprio = torch.cat([env.bend_cmd.reshape(n, 6), ((env.elev_cmd - ELEV_MID) / ELEV_HALF)[:, None],
-                         env.prev_action], dim=1).float()
+    # own actuators: bend commands (joint-servo robot) or the 6 motor encoders (cable-driven robot)
+    cmd = env.command_features() if hasattr(env, "command_features") else env.bend_cmd.reshape(n, 6)
+    proprio = torch.cat([cmd, ((env.elev_cmd - ELEV_MID) / ELEV_HALF)[:, None], env.prev_action], dim=1).float()
     return img, proprio
 
 

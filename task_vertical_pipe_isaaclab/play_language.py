@@ -55,11 +55,15 @@ parser.add_argument("--view", choices=["close", "wide"], default="close",
                     help="video scene view: close = near the pipes (as play_vision.py --view close), wide = whole rig")
 parser.add_argument("--output", type=str, default="")
 parser.add_argument("--hold", type=float, default=1.0)
+parser.add_argument("--cable", action="store_true",
+                    help="cable-driven robot (cable_stages.CableMultiPipeEnv); default student models/student_multi_cable/final.pt")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
+if args.cable and args.student == parser.get_default("student"):
+    args.student = os.path.join("models", "student_multi_cable", "final.pt")
 args.interactive = args.interactive or args.ui
 # Isaac Lab 3: no --headless / --enable_cameras flags; the window opens only with a Kit visualizer
 # (scene_view_cfg in make_env), and the launcher's own "video" option is not --video of this script
@@ -86,15 +90,24 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
 def make_env(n, render):
-    cfg = MultiPipeEnvCfg()
+    if args.cable:
+        from cable_stages import CableMultiPipeEnv, CableMultiPipeEnvCfg
+
+        cfg = CableMultiPipeEnvCfg()
+        cfg.show_cables = cfg.show_actuators = render or args.interactive   # cables + lead-screw drive drawn
+        cfg.cable_draw_radius = 0.0014
+    else:
+        cfg = MultiPipeEnvCfg()
     cfg.scene.num_envs = n
     cfg.seed = args.seed
     cfg.p_position = args.p_position
     cfg.sim.device = args.device
     if render or args.interactive:
         resolution, lookat, eye = VIEW
+        if args.cable and args.interactive:               # whole drive in view: motors + screws, arm, pipes
+            lookat, eye = (0.10, 0.20, 1.05), (1.10, 1.25, 1.40)
         cfg.sim.visualizer_cfgs = [scene_view_cfg(eye, lookat, resolution, headless=not args.interactive)]
-    return MultiPipeEnv(cfg)
+    return (CableMultiPipeEnv if args.cable else MultiPipeEnv)(cfg)
 
 
 class Mp4Writer:
