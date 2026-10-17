@@ -20,6 +20,8 @@ import imageio_ffmpeg
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from video_io import VideoReader   # this env's OpenCV cannot read videos
+
 TASK_DIR = os.path.dirname(os.path.abspath(__file__))
 parser = argparse.ArgumentParser(description="Project showcase video")
 parser.add_argument("--mujoco", default=r"D:\mujoco\Continuum_MuJoCo\task_vertical_pipe\videos\vertical_pipe_both_wide.mp4")
@@ -174,10 +176,10 @@ def caption(tag, text):
 
 def clip(path, speed, overlay):
     """(frame count, generator) of a clip played at `speed`, fitted above the caption bar."""
-    cap = cv2.VideoCapture(path)
+    cap = VideoReader(path)
     if not cap.isOpened():
         raise FileNotFoundError(path)
-    src_fps, n = cap.get(cv2.CAP_PROP_FPS), int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    src_fps, n = cap.fps, cap.frame_count
     count = int(n / src_fps / speed * FPS)
     rgb, alpha = overlay
 
@@ -204,10 +206,10 @@ def clip(path, speed, overlay):
 
 def full_clip(path, speed=1.0):
     """(frame count, generator) of a 1920 x 1080 clip shown as it is."""
-    cap = cv2.VideoCapture(path)
+    cap = VideoReader(path)
     if not cap.isOpened():
         raise FileNotFoundError(path)
-    src_fps, n = cap.get(cv2.CAP_PROP_FPS), int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    src_fps, n = cap.fps, cap.frame_count
     count = int(n / src_fps / speed * FPS)
 
     def gen():

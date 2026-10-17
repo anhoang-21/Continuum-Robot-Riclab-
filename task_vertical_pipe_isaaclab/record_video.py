@@ -28,6 +28,8 @@ sys.path.insert(0, TASK_DIR)
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
+from app_launch import launcher_args  # noqa: E402
+
 parser = argparse.ArgumentParser(description="Record a two-panel MP4 of the policy in Isaac Sim")
 parser.add_argument("--checkpoint", type=str, default=os.path.join("models", "mujoco_ppo_vpipe_wide", "model.pt"))
 parser.add_argument("--pipe-mode", choices=["rig", "random"], default="random")
@@ -46,13 +48,10 @@ parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
-args.headless = True
-args.enable_cameras = True
-app = AppLauncher(args).app
+app = AppLauncher(launcher_args(args)).app
 
 import cv2  # noqa: E402
 import omni.replicator.core as rep  # noqa: E402
-from isaacsim.core.utils.viewports import set_camera_view  # noqa: E402
 from pxr import Gf, UsdGeom  # noqa: E402
 from tensordict import TensorDict  # noqa: E402
 from rsl_rl.models import MLPModel  # noqa: E402
@@ -64,6 +63,7 @@ import constants as C  # noqa: E402
 from agent_cfg import make_agent_cfg  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
 from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg  # noqa: E402
+from video_io import Mp4Writer  # noqa: E402
 
 STAGE_COLORS = {"ALIGN": (0, 200, 255), "INSERT": (255, 200, 0), "EXIT": (80, 255, 80)}   # BGR
 FAILURE_TEXT = {"rim_hit": "HIT THE PIPE RIM", "missed_pipe": "MISSED THE PIPE", "unstable": "SIM UNSTABLE",
@@ -98,6 +98,7 @@ class Camera:
         cam.CreateVerticalApertureAttr(v_ap)
         cam.CreateHorizontalApertureAttr(v_ap * width / height)
         cam.CreateClippingRangeAttr(Gf.Vec2f(0.01, 100.0))
+        self._xform = UsdGeom.Xformable(cam).AddTransformOp()
         self.path = path
         self.product = rep.create.render_product(path, (width, height))
         self.annotator = rep.AnnotatorRegistry.get_annotator("rgb", device="cpu")
@@ -105,7 +106,10 @@ class Camera:
         self.width, self.height = width, height
 
     def look(self, eye, target):
-        set_camera_view(eye=np.asarray(eye, dtype=float), target=np.asarray(target, dtype=float), camera_prim_path=self.path)
+        """Camera at eye looking at target, z up (USD camera: -z forward, +y up)."""
+        view = Gf.Matrix4d()
+        view.SetLookAt(Gf.Vec3d(*(float(v) for v in eye)), Gf.Vec3d(*(float(v) for v in target)), Gf.Vec3d(0, 0, 1))
+        self._xform.Set(view.GetInverse())
 
     def image(self):
         data = self.annotator.get_data()
@@ -241,7 +245,7 @@ def main():
     out = args.output or os.path.join(TASK_DIR, "videos", f"isaac_vertical_pipe_{args.pipe_mode}_wide.mp4")
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     fps = 50.0 / args.slowdown
-    writer = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (args.width, args.height))
+    writer = Mp4Writer(out, fps, (args.width, args.height))
 
     def grab(ep, step, successes, finished):
         update_markers(markers, env, finished)

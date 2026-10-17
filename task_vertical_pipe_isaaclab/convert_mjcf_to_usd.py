@@ -37,8 +37,6 @@ sys.path.insert(0, TASK_DIR)
 
 import constants as C  # noqa: E402
 
-GEN_MJCF_DIR = os.path.join(C.GENERATED_DIR, "mjcf")
-GEN_USD_DIR = os.path.join(C.GENERATED_DIR, "usd")
 EXIT_MARGIN_LEGS = C.EXIT_MARGIN + 0.060 + 0.005   # highest pipe bottom above the plate (reset_logic) + margin
 
 
@@ -318,12 +316,14 @@ def main():
                         help="folder with the .obj meshes referenced by the MJCF (visual USD only)")
     parser.add_argument("--no-visual", action="store_true", help="only build the collider-only USD")
     parser.add_argument("--pipes-only", action="store_true", help="only rewrite pipe_rig.usd / pipe_random.usd")
+    parser.add_argument("--out-dir", default=C.GENERATED_DIR,
+                        help="output folder (mjcf/, usd/, conversion_report.txt); default assets/generated")
     from isaaclab.app import AppLauncher
     AppLauncher.add_app_launcher_args(parser)
     if not any(a.startswith("--/app/vulkan") for a in sys.argv):
         sys.argv.append("--/app/vulkan=false")
     args, _ = parser.parse_known_args()
-    args.headless = True
+    mjcf_dir, usd_dir = os.path.join(args.out_dir, "mjcf"), os.path.join(args.out_dir, "usd")
 
     variants = {} if args.pipes_only else {"continuum_physics": False}
     if not args.no_visual and not args.pipes_only:
@@ -333,18 +333,18 @@ def main():
             print(f"[WARN] mesh folder {args.mesh_dir} not found - skipping the visual USD")
     xmls = {}
     for name, visual in variants.items():
-        xmls[name] = build_import_mjcf(args.mjcf, os.path.join(GEN_MJCF_DIR, f"{name}.xml"), visual, args.mesh_dir)
+        xmls[name] = build_import_mjcf(args.mjcf, os.path.join(mjcf_dir, f"{name}.xml"), visual, args.mesh_dir)
         print(f"[MJCF] {xmls[name]}")
 
-    app = AppLauncher(args).app
-    import omni.kit.app
-    omni.kit.app.get_app().get_extension_manager().set_extension_enabled_immediate("isaacsim.asset.importer.mjcf", True)
+    from app_launch import launcher_args
+
+    app = AppLauncher(launcher_args(args, cameras=False)).app
     from isaaclab.sim.converters import MjcfConverter, MjcfConverterCfg
 
     report = []
     for name, xml in xmls.items():
-        cfg = MjcfConverterCfg(asset_path=xml, usd_dir=os.path.join(GEN_USD_DIR, name), usd_file_name=f"{name}.usd",
-                               fix_base=True, import_sites=False, force_usd_conversion=True, make_instanceable=False,
+        cfg = MjcfConverterCfg(asset_path=xml, usd_dir=os.path.join(usd_dir, name), usd_file_name=f"{name}.usd",
+                               fix_base=True, force_usd_conversion=True, make_instanceable=False,
                                self_collision=False)
         usd_path = MjcfConverter(cfg).usd_path
         print(f"[USD] {usd_path}")
@@ -352,7 +352,7 @@ def main():
         inspect_robot_usd(usd_path, report)
 
     for mode in C.PIPE_MODES:
-        path = write_pipe_usd(os.path.join(GEN_USD_DIR, f"pipe_{mode}.usd"), mode)
+        path = write_pipe_usd(os.path.join(usd_dir, f"pipe_{mode}.usd"), mode)
         report.append(f"pipe ({mode}): {path}  bore {C.bore_length(mode) * 1000:.0f} mm, {C.N_STAVES} box staves")
 
     text = "\n".join(report)
@@ -360,7 +360,7 @@ def main():
         print(text)
         app.close()
         return
-    with open(os.path.join(C.GENERATED_DIR, "conversion_report.txt"), "w", encoding="utf-8") as f:
+    with open(os.path.join(args.out_dir, "conversion_report.txt"), "w", encoding="utf-8") as f:
         f.write(text + "\n")
     print(text)
     app.close()

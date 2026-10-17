@@ -2,7 +2,7 @@
 ==============================================================================
 tests/check_cable_env.py - checks of the cable-driven robot (cable_env.py) in PhysX
 ==============================================================================
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe tests\\check_cable_env.py [--no-gravity]
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe tests\\check_cable_env.py [--no-gravity]
 
 1. statics: random motor targets -> let PhysX settle -> the pose must be the equilibrium of
    cables.CableModel (+ GravityModel), and the motor torque the screw torque of the nut load

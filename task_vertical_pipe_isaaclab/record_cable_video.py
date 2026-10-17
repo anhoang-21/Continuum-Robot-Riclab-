@@ -2,9 +2,9 @@
 ==============================================================================
 record_cable_video.py - 1920 x 1080 clips of the cable-driven robot (motors -> lead screws -> cables)
 ==============================================================================
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe record_cable_video.py --mode demo
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe record_cable_video.py --mode ppo --episodes 3
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe record_cable_video.py --mode student --episodes 4
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe record_cable_video.py --mode demo
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe record_cable_video.py --mode ppo --episodes 3
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe record_cable_video.py --mode student --episodes 4
 
 Left: Isaac Sim with the 12 cables drawn through the disc holes and the drive of the CAD over the
 arm (tension box, 6 lead screws in their cage, motors on top) brought to life: a nut that runs on
@@ -36,6 +36,8 @@ sys.path.insert(0, TASK_DIR)
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
+from app_launch import launcher_args  # noqa: E402
+
 parser = argparse.ArgumentParser(description="Clips of the cable-driven robot")
 parser.add_argument("--mode", choices=["demo", "ppo", "student"], default="demo")
 parser.add_argument("--policy", default=os.path.join("models", "ppo_cable_128", "best_model.pt"))
@@ -50,9 +52,7 @@ parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
-args.headless = True
-args.enable_cameras = True
-app = AppLauncher(args).app
+app = AppLauncher(launcher_args(args)).app
 
 import cv2  # noqa: E402
 import imageio_ffmpeg  # noqa: E402
@@ -62,6 +62,7 @@ import constants as C  # noqa: E402
 import motors as MT  # noqa: E402
 from actuator_viz import draw_actuators  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
+from vertical_pipe_env import scene_frame, scene_view_cfg, set_scene_view  # noqa: E402
 
 W, H, FPS = 1920, 1080, 25
 PANEL_W = 640
@@ -92,7 +93,8 @@ def configure(cfg, view):
     cfg.cable_draw_radius = 0.0012
     cfg.seed = args.seed
     cfg.sim.device = args.device
-    cfg.viewer.resolution, cfg.viewer.lookat, cfg.viewer.eye = view
+    resolution, lookat, eye = view
+    cfg.sim.visualizer_cfgs = [scene_view_cfg(eye, lookat, resolution)]
     return cfg
 
 
@@ -144,7 +146,7 @@ def result_badge(img, text, top=True):
 
 
 def scene_image(env, size):
-    img = cv2.cvtColor(np.ascontiguousarray(env.render()), cv2.COLOR_RGB2BGR)
+    img = cv2.cvtColor(np.ascontiguousarray(scene_frame(env)), cv2.COLOR_RGB2BGR)
     return cv2.resize(img, size, interpolation=cv2.INTER_AREA)
 
 
@@ -160,7 +162,7 @@ def run_demo(out):
     cfg = configure(CableVerticalPipeEnvCfg(), FULL_VIEW)
     cfg.pipe_modes = ("rig",)
     cfg.max_episode_steps = 10 ** 6
-    env = CableVerticalPipeEnv(cfg, render_mode="rgb_array")
+    env = CableVerticalPipeEnv(cfg)
     hide_frame(env)
     env.auto_reset = False
     env.reset()
@@ -185,7 +187,7 @@ def run_demo(out):
     steps += [(u_s * (n - k - 1) / n, "back to straight") for k in range(n)] + [(np.zeros(6), "back to straight")] * 20
     ff = open_writer(out)
     for _ in range(3):
-        env.render()
+        scene_frame(env)
     with torch.inference_mode():
         for k, (target, caption) in enumerate(steps):
             a = torch.zeros(1, 7, device=env.device)
@@ -218,16 +220,16 @@ def run_ppo(out):
     cfg.scene.env_spacing = 6.0                                  # the other robot out of the wide view
     cfg.pipe_modes = tuple(modes)
     cfg.assist_prob = 0.0
-    env = CableVerticalPipeEnv(cfg, render_mode="rgb_array")
+    env = CableVerticalPipeEnv(cfg)
     hide_frame(env)
     env.auto_reset = False
     env.set_eval(True)
     obs, _ = env.reset()
     for _ in range(3):
-        env.render()
+        scene_frame(env)
     with torch.inference_mode():
         for k, mode in enumerate(modes):
-            env.viewport_camera_controller.set_view_env_index(k)
+            set_scene_view(env, env_index=k)
             if k > 0:                                           # this env ran unseen meanwhile: start it afresh
                 obs = env.reset_envs([k])
             for ep in range(args.episodes):
@@ -271,21 +273,21 @@ def run_student(out):
     cfg.scene.num_envs = len(modes)
     cfg.pipe_modes = tuple(modes)
     cfg.assist_prob = 0.0
-    env = CableVisionPipeEnv(cfg, render_mode="rgb_array")
+    env = CableVisionPipeEnv(cfg)
     env.auto_reset = False
     student = load_student(os.path.join(TASK_DIR, args.student), device=env.device)
     ctrl = SearchInsertController(env, actor=None, student=student)
     obs, _ = env.reset()
     ctrl.reset(range(env.num_envs))
     for _ in range(3):
-        env.render()
+        scene_frame(env)
     ff = open_writer(out)
     steps_txt = (("LOOK / LIFT / SCAN", "tip camera finds the pipe mouth"),
                  ("APPROACH", "motors bend the arm to a pre-insertion pose"),
                  ("INSERT", "image-based student drives the 6 motors"))
     with torch.inference_mode():
         for k, mode in enumerate(modes):
-            env.viewport_camera_controller.set_view_env_index(k)
+            set_scene_view(env, env_index=k)
             if k > 0:                                           # this env ran unseen meanwhile: start it afresh
                 obs = env.reset_envs([k])
                 ctrl.reset([k])

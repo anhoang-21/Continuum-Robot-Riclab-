@@ -34,7 +34,10 @@ sys.path.insert(0, TASK_DIR)
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
+from app_launch import launcher_args  # noqa: E402
+
 parser = argparse.ArgumentParser(description="Play a trained PPO policy: continuum robot through a vertical pipe")
+parser.add_argument("--headless", action="store_true", help="success statistics, no window")
 parser.add_argument("--checkpoint", type=str, default="", help="rsl_rl .pt (default: models/ppo_vpipe/best_model.pt)")
 parser.add_argument("--pipe-mode", choices=["rig", "random", "both"], default="both")
 parser.add_argument("--episodes", type=int, default=5, help="episodes per pipe mode")
@@ -62,10 +65,8 @@ parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
-if args.video:
-    args.enable_cameras = True
-    args.headless = True
-app = AppLauncher(args).app
+GUI = not args.headless and not args.video                    # Isaac Sim window (scene_view_cfg in make_env)
+app = AppLauncher(launcher_args(args, gui=GUI, cameras=args.video)).app
 
 from tensordict import TensorDict  # noqa: E402
 from rsl_rl.models import MLPModel  # noqa: E402
@@ -74,7 +75,8 @@ import constants as C  # noqa: E402
 from agent_cfg import make_agent_cfg  # noqa: E402
 from cable_env import CableVerticalPipeEnv, CableVerticalPipeEnvCfg  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
-from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg  # noqa: E402
+from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg, scene_frame, scene_view_cfg, set_scene_view  # noqa: E402
+from video_io import Mp4Writer  # noqa: E402
 
 FAILURE_TEXT = {"rim_hit": "HIT THE PIPE RIM", "missed_pipe": "MISSED THE PIPE", "unstable": "SIM UNSTABLE",
                 "timeout": "TIME OUT"}
@@ -106,7 +108,7 @@ def load_actor(path):
     return actor
 
 
-def make_env(modes, num_envs, visual, render_mode=None):
+def make_env(modes, num_envs, visual, view=False):
     cfg = CableVerticalPipeEnvCfg() if args.cable else VerticalPipeEnvCfg()
     if args.cable:
         cfg.action_mode = args.action_mode
@@ -122,9 +124,9 @@ def make_env(modes, num_envs, visual, render_mode=None):
     cfg.visual = visual
     cfg.scene.env_spacing = args.env_spacing
     cfg.sim.device = args.device
-    if args.video:
-        cfg.viewer.resolution = (1280, 720)
-    return (CableVerticalPipeEnv if args.cable else VerticalPipeEnv)(cfg, render_mode=render_mode)
+    if view:                                                  # window or video: the scene camera on env 0
+        cfg.sim.visualizer_cfgs = [scene_view_cfg(resolution=(1280, 720), headless=not GUI)]
+    return (CableVerticalPipeEnv if args.cable else VerticalPipeEnv)(cfg)
 
 
 def act(actor, obs, env):
@@ -216,20 +218,17 @@ def run_live(actor, modes):
     shown one after the other like the MuJoCo demo: the camera (window or MP4) follows env k while its
     episodes are counted; the other env keeps running the policy in the background.
     """
-    render_mode = "rgb_array" if args.video else None
-    env = make_env(modes, len(modes), visual=not args.no_meshes, render_mode=render_mode)
+    env = make_env(modes, len(modes), visual=not args.no_meshes, view=True)
     writer, out = None, ""
     if args.video:
-        import cv2
         out = args.output or os.path.join(TASK_DIR, "videos", f"vertical_pipe_{args.pipe_mode}.mp4")
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-        writer = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), 50.0 / args.slowdown, (1280, 720))
+        writer = Mp4Writer(out, 50.0 / args.slowdown, (1280, 720))
     results = {}
     env.auto_reset = False                      # keep the final pose on screen, then reset explicitly
     obs, _ = env.reset()
     for k, mode in enumerate(modes):
-        if env.viewport_camera_controller is not None:
-            env.viewport_camera_controller.set_view_env_index(k)
+        set_scene_view(env, env_index=k)
         successes = 0
         for ep in range(1, args.episodes + 1):
             print(f"\n--- [{mode}] episode {ep}/{args.episodes} | pipe top at "
@@ -256,7 +255,7 @@ def run_live(actor, modes):
                                      f"contacts {info['contact_steps']:3d} | elevator {info['elevator_mm']:+6.1f} mm ")
                 if writer is not None:
                     import cv2
-                    frame = cv2.cvtColor(np.ascontiguousarray(env.render()), cv2.COLOR_RGB2BGR)
+                    frame = cv2.cvtColor(np.ascontiguousarray(scene_frame(env)), cv2.COLOR_RGB2BGR)
                     frame = draw_hud(cv2, frame, env, k, ep, args.episodes, step, successes, finished)
                     for _ in range(int(args.hold * 50 / args.slowdown) if done else 1):
                         writer.write(frame)
@@ -285,21 +284,16 @@ def run_many(actor, modes, n):
     pipe mode i % #modes) and the camera looks at the whole grid. Stops when every pipe mode has
     --episodes finished episodes.
     """
-    render_mode = "rgb_array" if args.video else None
-    env = make_env(modes, n, visual=not args.no_meshes, render_mode=render_mode)
-    if env.viewport_camera_controller is not None:
-        origins = env.scene.env_origins.cpu().numpy()
-        centre = origins.mean(axis=0) + np.array([0.09, 0.21, 0.55])        # middle of the robot / pipe area
-        extent = float(np.abs(origins[:, :2] - origins[:, :2].mean(axis=0)).max()) + 1.0
-        env.viewport_camera_controller.update_view_to_world()
-        env.viewport_camera_controller.update_view_location(
-            eye=centre + np.array([1.3 * extent, -1.3 * extent, 0.9 * extent]), lookat=centre)
+    env = make_env(modes, n, visual=not args.no_meshes, view=True)
+    origins = env.scene.env_origins.cpu().numpy()
+    centre = origins.mean(axis=0) + np.array([0.09, 0.21, 0.55])            # middle of the robot / pipe area
+    extent = float(np.abs(origins[:, :2] - origins[:, :2].mean(axis=0)).max()) + 1.0
+    set_scene_view(env, world=True, eye=centre + np.array([1.3 * extent, -1.3 * extent, 0.9 * extent]), lookat=centre)
     writer, out = None, ""
     if args.video:
-        import cv2
         out = args.output or os.path.join(TASK_DIR, "videos", f"vertical_pipe_{args.pipe_mode}_{n}envs.mp4")
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-        writer = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), 50.0 / args.slowdown, (1280, 720))
+        writer = Mp4Writer(out, 50.0 / args.slowdown, (1280, 720))
     results = {m: [] for m in modes}
     steps = np.zeros(n, dtype=int)
     env.auto_reset = False
@@ -320,7 +314,7 @@ def run_many(actor, modes, n):
             steps[i] = 0
         if writer is not None:
             import cv2
-            frame = cv2.cvtColor(np.ascontiguousarray(env.render()), cv2.COLOR_RGB2BGR)
+            frame = cv2.cvtColor(np.ascontiguousarray(scene_frame(env)), cv2.COLOR_RGB2BGR)
             text = f"{n} robots | " + " | ".join(
                 f"{m}: {results[m].count('success')}/{len(results[m])} success" for m in modes)
             cv2.putText(frame, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (20, 20, 20), 2, cv2.LINE_AA)

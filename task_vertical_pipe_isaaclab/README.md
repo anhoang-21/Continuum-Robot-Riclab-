@@ -78,6 +78,18 @@ tensorboard --logdir logs
 All scripts append `--/app/vulkan=false` (DirectX 12, as the other Isaac scripts on this machine)
 and import torch / tensordict / rsl_rl before Kit starts (Windows DLL order).
 
+`env_isaacsim62` is Isaac Sim 6.2 + Isaac Lab 3 (Python 3.12). Differences to the former Isaac Lab 2
+environment that the scripts handle:
+- there are no `--headless` / `--enable_cameras` launcher flags: `app_launch.launcher_args()` sets them, and
+  the Isaac Sim window is a Kit visualizer (`vertical_pipe_env.scene_view_cfg`, `set_scene_view`), which also
+  gives the video frames (`scene_frame`; `env.render()` returns no image any more). `play_vertical_pipe.py`
+  keeps its own `--headless` (statistics);
+- its OpenCV has no video I/O: MP4s are written / read through imageio-ffmpeg (`video_io.py`), so install it
+  once: `D:\Isaacsim\env_isaacsim62\Scripts\python.exe -m pip install imageio-ffmpeg`;
+- Isaac Sim 6.2 and the VLM do not fit together in the 8 GB GPU (CUDA error 719 in the renderer):
+  `play_language.py` loads the VLM on the CPU by default (`--vlm-device cuda` to override);
+- quaternions are (x, y, z, w), asset data is read with `.torch`, writes use the `*_index` methods.
+
 ## What is the same as MuJoCo
 
 | | MuJoCo (`task_vertical_pipe`) | Isaac Lab |

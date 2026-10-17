@@ -14,7 +14,7 @@ policy sees can come from the camera:
 
 The camera pose is computed from the Seg15 link pose and the fixed mounting offset
 (what forward kinematics gives on the real robot), not read back from the renderer.
-Needs --enable_cameras.
+Needs camera rendering (app_launch.launcher_args, cameras=True).
 ==============================================================================
 """
 

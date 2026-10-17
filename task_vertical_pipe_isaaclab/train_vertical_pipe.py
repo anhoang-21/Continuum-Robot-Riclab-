@@ -35,6 +35,8 @@ sys.path.insert(0, TASK_DIR)
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
+from app_launch import launcher_args  # noqa: E402
+
 parser = argparse.ArgumentParser(description="PPO (rsl_rl): continuum robot moves down through a vertical pipe")
 parser.add_argument("--timesteps", type=int, default=3_000_000, help="Total training steps (default 3M)")
 parser.add_argument("--n-envs", type=int, default=16, help="Parallel environments (default 16, as the MuJoCo trainer)")
@@ -70,15 +72,14 @@ parser.set_defaults(device="cuda:0")      # PhysX GPU pipeline (the CPU pipeline
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
-args.headless = not args.viewer
-app = AppLauncher(args).app
+app = AppLauncher(launcher_args(args, gui=args.viewer, cameras=False)).app
 
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 
 from agent_cfg import N_STEPS, make_agent_cfg, num_iterations  # noqa: E402
 from pipe_runner import PipeRunner  # noqa: E402
 from cable_env import CableVerticalPipeEnv, CableVerticalPipeEnvCfg  # noqa: E402
-from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg  # noqa: E402
+from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg, scene_view_cfg  # noqa: E402
 
 
 def env_modes(pipe_mode):
@@ -110,6 +111,8 @@ def main():
     cfg.random_offset = (0.0, args.max_offset)
     cfg.seed = args.seed
     cfg.sim.device = args.device
+    if args.viewer:                                      # Isaac Lab 3: the window is a Kit visualizer
+        cfg.sim.visualizer_cfgs = [scene_view_cfg(headless=False)]
     modes = [cfg.pipe_modes[i % len(cfg.pipe_modes)] for i in range(args.n_envs)]
     n_steps = args.steps_per_env or N_STEPS
 

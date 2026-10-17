@@ -2,9 +2,9 @@
 ==============================================================================
 analyze_torque.py - motor torques needed to insert the cable-driven robot into the pipe
 ==============================================================================
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe analyze_torque.py                        # joint-trained policy, "bend" mode
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe analyze_torque.py --checkpoint models\\ppo_cable\\best_model.pt --action-mode motor
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe analyze_torque.py --episodes 40 --pipe-mode random
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe analyze_torque.py                        # joint-trained policy, "bend" mode
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe analyze_torque.py --checkpoint models\\ppo_cable\\best_model.pt --action-mode motor
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe analyze_torque.py --episodes 40 --pipe-mode random
 
 Runs insertion episodes in cable_env.py (6 lead-screw motors -> 12 cables -> arm, gravity,
 pipe contacts) and records every 20 ms step: motor torque, speed and nut load of the 6 cable
@@ -36,6 +36,8 @@ sys.path.insert(0, TASK_DIR)
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
+from app_launch import launcher_args  # noqa: E402
+
 parser = argparse.ArgumentParser(description="Motor torques of the cable-driven robot during pipe insertion")
 parser.add_argument("--checkpoint", default="models/mujoco_ppo_vpipe_wide/model.pt", help="rsl_rl .pt")
 parser.add_argument("--action-mode", choices=["bend", "motor"], default="bend",
@@ -52,8 +54,7 @@ parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
-args.headless = True
-app = AppLauncher(args).app
+app = AppLauncher(launcher_args(args, cameras=False)).app
 
 from rsl_rl.models import MLPModel  # noqa: E402
 from tensordict import TensorDict  # noqa: E402

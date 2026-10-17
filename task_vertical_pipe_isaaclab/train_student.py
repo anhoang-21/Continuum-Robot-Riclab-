@@ -35,6 +35,8 @@ sys.path.insert(0, TASK_DIR)
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
+from app_launch import launcher_args  # noqa: E402
+
 parser = argparse.ArgumentParser(description="DAgger: tip-camera student from the privileged PPO teacher")
 parser.add_argument("--teacher", type=str, default=os.path.join("models", "mujoco_ppo_vpipe_wide", "model.pt"))
 parser.add_argument("--run-name", type=str, default="student_vpipe")
@@ -65,9 +67,7 @@ parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
-args.enable_cameras = True
-args.headless = True
-app = AppLauncher(args).app
+app = AppLauncher(launcher_args(args)).app
 
 from tensordict import TensorDict  # noqa: E402
 from torch.utils.tensorboard import SummaryWriter  # noqa: E402

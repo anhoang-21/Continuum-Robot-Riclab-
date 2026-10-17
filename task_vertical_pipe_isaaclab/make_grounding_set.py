@@ -27,6 +27,8 @@ sys.path.insert(0, TASK_DIR)
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
+from app_launch import launcher_args  # noqa: E402
+
 parser = argparse.ArgumentParser(description="Overview images with instructions and ground truth")
 parser.add_argument("--scenes", type=int, default=300)
 parser.add_argument("--num_envs", "--num-envs", dest="num_envs", type=int, default=16)
@@ -37,9 +39,7 @@ parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
-args.enable_cameras = True
-args.headless = True
-app = AppLauncher(args).app
+app = AppLauncher(launcher_args(args)).app
 
 from PIL import Image  # noqa: E402
 

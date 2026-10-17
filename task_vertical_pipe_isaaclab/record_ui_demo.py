@@ -30,6 +30,8 @@ sys.path.insert(0, TASK_DIR)
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
+from app_launch import launcher_args  # noqa: E402
+
 parser = argparse.ArgumentParser(description="Stage 5 demo video with the command window")
 parser.add_argument("--student", default=os.path.join("models", "student_multi", "final.pt"))
 parser.add_argument("--episodes", type=int, default=4)
@@ -43,12 +45,10 @@ parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
-args.enable_cameras = True
-args.headless = True
 if args.cable and args.student == parser.get_default("student"):
     args.student = os.path.join("models", "student_multi_cable", "final.pt")
 args.output = args.output or os.path.join(TASK_DIR, "videos", "ui_demo_cable.mp4" if args.cable else "ui_demo.mp4")
-app = AppLauncher(args).app
+app = AppLauncher(launcher_args(args)).app
 
 import re  # noqa: E402
 import subprocess  # noqa: E402
@@ -62,6 +62,7 @@ from multi_pipe import PALETTE  # noqa: E402
 from multi_pipe_env import MultiPipeEnv, MultiPipeEnvCfg  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
 from student_policy import load_student  # noqa: E402
+from vertical_pipe_env import scene_frame, scene_view_cfg, set_scene_view  # noqa: E402
 from vision_pipeline import GIVE_UP  # noqa: E402
 from vlm import QwenGrounder  # noqa: E402
 
@@ -269,10 +270,9 @@ def main():
     cfg.scene.num_envs = 1
     cfg.seed = args.seed
     cfg.sim.device = args.device
-    cfg.viewer.resolution, cfg.viewer.eye, cfg.viewer.lookat = (SCENE_W, SCENE_H), EYE, TARGET
-    if args.cable:
-        cfg.viewer.eye, cfg.viewer.lookat = CABLE_EYE, CABLE_TARGET
-    env = (CableMultiPipeEnv if args.cable else MultiPipeEnv)(cfg, render_mode="rgb_array")
+    eye, lookat = (CABLE_EYE, CABLE_TARGET) if args.cable else (EYE, TARGET)
+    cfg.sim.visualizer_cfgs = [scene_view_cfg(eye, lookat, (SCENE_W, SCENE_H))]
+    env = (CableMultiPipeEnv if args.cable else MultiPipeEnv)(cfg)
     student = load_student(os.path.join(TASK_DIR, args.student), device=env.device)
     ctrl = LanguageInsertController(env, student, grounder.ground, follow_choice=True)
     env.auto_reset = False
@@ -308,7 +308,7 @@ def main():
 
     obs, _ = env.reset()
     for _ in range(3):
-        env.render()
+        scene_frame(env)
     for ep in range(args.episodes):
         if ep > 0:
             obs = env.reset_envs([0])
@@ -323,15 +323,15 @@ def main():
         else:
             look = np.array([*sc.pipe_xy.mean(axis=0), TARGET[2] + 0.03])
             eye = look + 0.7 * (np.array(EYE) - np.array(TARGET))        # inside the frame: no post in the way
-        env.viewport_camera_controller.update_view_location(eye=tuple(eye), lookat=tuple(look))
+        set_scene_view(env, eye=eye, lookat=look)
         for _ in range(3):
-            env.render()
+            scene_frame(env)
         u.colors = [sc.colors[j] for j in np.argsort(sc.image_x)]
         u.state = {"status": "ready: type an instruction", "phase": "-", "VLM box (0-1000)": "-", "chosen pipe": "-",
                    "result": "-"}
         u.text, u.busy = "", False
         view.update(box=None, ring=None, phase="")
-        scene = env.render()
+        scene = scene_frame(env)
         for k in range(int(1.0 * FPS)):                   # new scene
             u.cursor = (k // 12) % 2 == 0
             write(scene)
@@ -373,7 +373,7 @@ def main():
                 ring = np.stack([dd.pipe_xy[0] + 0.0345 * np.cos(a), dd.pipe_xy[1] + 0.0345 * np.sin(a),
                                  np.full_like(a, dd.z_top)], axis=1)
                 view["ring"] = env.overview.project(ring)
-            scene = env.render()
+            scene = scene_frame(env)
             write(scene)
         result = "THROUGH THE PIPE!" if name == "success" else name.upper().replace("_", " ")
         u.state.update(result=result, status="done")
