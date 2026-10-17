@@ -3,9 +3,9 @@
 record_video.py - Two-panel MP4 in Isaac Sim, in the style of the MuJoCo demo
 (demo_vertical_pipe.py --fixed-camera: wide frontal view + close-up of the pipe entrance, HUD)
 ==============================================================================
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe record_video.py                      # 12 random pipes
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe record_video.py --pipe-mode rig --episodes 5
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe record_video.py --checkpoint models\\ppo_vpipe\\best_model.pt
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe record_video.py                      # 12 random pipes
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe record_video.py --pipe-mode rig --episodes 5
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe record_video.py --checkpoint models\\ppo_vpipe\\best_model.pt
 
 Episode k uses the pipe placement of the MuJoCo demo for the same seed (reset seed = --seed + k), so
 the scenes match videos/vertical_pipe_random_wide.mp4 of the MuJoCo version.

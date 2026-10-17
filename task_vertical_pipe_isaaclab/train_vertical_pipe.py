@@ -4,9 +4,9 @@ train_vertical_pipe.py - PPO (rsl_rl) training in Isaac Lab: continuum robot
 threads a vertical pipe. Port of D:\\mujoco\\Continuum_MuJoCo\\task_vertical_pipe\\train_vertical_pipe.py
 ==============================================================================
 Examples (run from this folder with the Isaac Lab python):
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe train_vertical_pipe.py                    # 3M steps, mixed scenes
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe train_vertical_pipe.py --pipe-mode rig    # only the plate-hole pipe
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe train_vertical_pipe.py --resume models/ppo_vpipe/best_model.pt
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe train_vertical_pipe.py                    # 3M steps, mixed scenes
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe train_vertical_pipe.py --pipe-mode rig    # only the plate-hole pipe
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe train_vertical_pipe.py --resume models/ppo_vpipe/best_model.pt
 
 Same options and defaults as the MuJoCo trainer (--timesteps 3M, --n-envs 16, --pipe-mode
 mixed = even envs on the rig pipe / odd envs on a random pipe, --assist 0.4, --contact-penalty 0.1,
@@ -137,7 +137,7 @@ def main():
     best_path = os.path.join(models_dir, "best_model.pt")
     if not os.path.exists(best_path):
         best_path = os.path.join(models_dir, "final_model.pt")
-    print(f"Watch it:  D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_vertical_pipe.py --checkpoint {best_path}")
+    print(f"Watch it:  D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe play_vertical_pipe.py --checkpoint {best_path}")
 
 
 if __name__ == "__main__":

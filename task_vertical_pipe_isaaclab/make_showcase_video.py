@@ -2,7 +2,7 @@
 ==============================================================================
 make_showcase_video.py - 1080p project video (title cards + the recorded clips)
 ==============================================================================
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe make_showcase_video.py --output videos\\showcase.mp4
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe make_showcase_video.py --output videos\\showcase.mp4
 
 Title -> Stage 1 (MuJoCo clip) -> Stages 2-3 (tip camera + PPO clip) -> Stage 4 (image-based
 student clip) -> results -> Stage 5 (instruction -> local VLM -> student clip) -> its results

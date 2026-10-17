@@ -2,7 +2,7 @@
 ==============================================================================
 import_sb3_policy.py - SB3 PPO model of the MuJoCo trainer -> rsl_rl checkpoint
 ==============================================================================
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe import_sb3_policy.py ^
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe import_sb3_policy.py ^
         D:\\mujoco\\Continuum_MuJoCo\\task_vertical_pipe\\models\\ppo_vpipe_wide\\final_model.zip ^
         models\\mujoco_ppo_vpipe_wide\\model.pt
 

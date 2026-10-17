@@ -5,11 +5,11 @@ play_vision.py - Tip camera finds the pipe, then the RL policy goes through it
 The policy only knows the pipe pose that the tip camera measured (perception.py);
 the search / hand-over logic is vision_pipeline.py. Needs cameras (always enabled here).
 
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_vision.py --episodes 50              # statistics
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_vision.py --obs-source gt --episodes 50   # baseline, true pose
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_vision.py --depth-noise 0.005 --rgb-noise 0.05
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_vision.py --meshes     # CAD frame / plate in the camera view
-    D:\\Isaacsim\\env_isaaclab\\Scripts\\python.exe play_vision.py --video --pipe-mode random --episodes 8 --seed 1   # --view close: near the pipe
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe play_vision.py --episodes 50              # statistics
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe play_vision.py --obs-source gt --episodes 50   # baseline, true pose
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe play_vision.py --depth-noise 0.005 --rgb-noise 0.05
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe play_vision.py --meshes     # CAD frame / plate in the camera view
+    D:\\Isaacsim\\env_isaacsim62\\Scripts\\python.exe play_vision.py --video --pipe-mode random --episodes 8 --seed 1   # --view close: near the pipe
 
 Statistics: success / failure per pipe mode, how the pipe was found (start view, after
 lifting, scan), search time, and the error of the estimated pipe mouth vs the truth.

@@ -2,8 +2,8 @@
 ==============================================================================
 eval_grounding.py - How well the local VLM picks the instructed pipe (Stage 5)
 ==============================================================================
-    D:\Isaacsim\env_isaaclab\Scripts\python.exe eval_grounding.py            # data/grounding, GPU
-    D:\Isaacsim\env_isaaclab\Scripts\python.exe eval_grounding.py --device cpu --limit 50
+    D:\Isaacsim\env_isaacsim62\Scripts\python.exe eval_grounding.py            # data/grounding, GPU
+    D:\Isaacsim\env_isaacsim62\Scripts\python.exe eval_grounding.py --device cpu --limit 50
 
 For every scene of make_grounding_set.py: Qwen3-VL (2B or 4B) gets the overview image and the
 instruction and answers with a box. Scored:
