@@ -28,6 +28,8 @@ sys.path.insert(0, TASK_DIR)
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
+from app_launch import launcher_args  # noqa: E402
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--no-gravity", action="store_true")
 parser.add_argument("--num-envs", type=int, default=8)
@@ -36,8 +38,7 @@ parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
-args.headless = True
-app = AppLauncher(args).app
+app = AppLauncher(launcher_args(args, cameras=False)).app
 
 import cables as CB  # noqa: E402
 import motors as MT  # noqa: E402
@@ -69,15 +70,15 @@ def make_env(mode):
 def move_pipes_away(env):
     pose = torch.zeros(env.num_envs, 7, device=env.device)
     pose[:, :3] = env.scene.env_origins + torch.tensor([0.0, 0.0, -3.0], device=env.device)
-    pose[:, 3] = 1.0
-    env.pipe.write_root_pose_to_sim(pose)
+    pose[:, 6] = 1.0                                       # identity quaternion (x, y, z, w)
+    env.pipe.write_root_pose_to_sim_index(root_pose=pose)
 
 
 def settle(env, seconds=5.0):
     """Zero actions keep the motor targets; let the physics come to rest."""
     for _ in range(int(seconds / 0.02)):
         env.step(torch.zeros(env.num_envs, 7, device=env.device))
-    return env.joint_q(), env.robot.data.joint_vel[:, env._jchain].abs().max().item()
+    return env.joint_q(), env.robot.data.joint_vel.torch[:, env._jchain].abs().max().item()
 
 
 def bend_of(q):
@@ -174,7 +175,7 @@ def main():
     unstable, max_tau = 0, 0.0
     for _ in range(400):
         env.step(torch.rand(n, 7, device=env.device) * 2 - 1)
-        qd = env.robot.data.joint_vel
+        qd = env.robot.data.joint_vel.torch
         unstable += int((~torch.isfinite(qd)).any() or qd.abs().max() > 1e3)
         max_tau = max(max_tau, env.motors.torque.abs().max().item())
     tens = env.tension

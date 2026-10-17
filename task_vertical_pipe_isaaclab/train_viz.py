@@ -44,7 +44,7 @@ class EpisodeRecorder:
         if (self._k - 1) % self.every:
             return
         env, i = self.env, self.i
-        seg = (env.robot.data.body_link_pos_w[i, env._seg_ids] - env.scene.env_origins[i]).cpu().numpy()
+        seg = (env.robot.data.body_link_pos_w.torch[i, env._seg_ids] - env.scene.env_origins[i]).cpu().numpy()
         m = env._meas
         frame = {"step": step, "seg": seg, "tip": m["tip"][i].cpu().numpy(), "depth": float(m["depth"][i]),
                  "lat": float(m["lat"][i]), "contacts": int(m["n_inner"][i])}

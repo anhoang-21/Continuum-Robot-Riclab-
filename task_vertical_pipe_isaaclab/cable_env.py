@@ -38,6 +38,7 @@ import math
 
 import numpy as np
 import torch
+import warp as wp
 
 import isaaclab.sim as sim_utils
 from isaaclab.utils import configclass
@@ -80,7 +81,7 @@ class CableVerticalPipeEnvCfg(VerticalPipeEnvCfg):
         bend = self.scene.robot.actuators["bend"]
         bend.stiffness = self.backbone_stiffness          # passive spring towards the straight pose
         bend.damping = self.backbone_damping
-        bend.effort_limit_sim = 1.0e3
+        bend.joint_effort_limit = 1.0e3
         self.sim.gravity = (0.0, 0.0, -9.81) if self.gravity else (0.0, 0.0, 0.0)
         self.scene.robot.spawn.rigid_props.disable_gravity = not self.gravity
 
@@ -110,6 +111,7 @@ class CableVerticalPipeEnv(VerticalPipeEnv):
         self.elev_torque = torch.zeros(n, dtype=f64, device=dev)
         self.bend_meas = torch.zeros(n, 3, 2, dtype=f64, device=dev)
         self._efforts = torch.zeros(n, self.robot.num_joints, device=dev)
+        self._efforts_wp = None                                               # warp view of _efforts (PhysX writes)
         self._motor_scale = torch.as_tensor(C.CABLE_RADIUS[CB.MOTOR_SECTION] * C.THETA_MAX, dtype=f64, device=dev)
         # static inputs of the per-physics-step drive computation (_cable_math)
         self._g_q = torch.zeros(n, 30, dtype=f64, device=dev)
@@ -147,7 +149,7 @@ class CableVerticalPipeEnv(VerticalPipeEnv):
     # ------------------------------------------------------------------
     def joint_q(self):
         """The 30 bending joint angles in cable-chain order (N, 30)."""
-        return self.robot.data.joint_pos[:, self._jchain].to(torch.float64)
+        return self.robot.data.joint_pos.torch[:, self._jchain].to(torch.float64)
 
     def measured_bend(self):
         """Bend vectors (N, 3, 2) of the simulated pose (inverse of kinematics.joint_angles)."""
@@ -249,21 +251,24 @@ class CableVerticalPipeEnv(VerticalPipeEnv):
         return graph
 
     def _cable_substep(self, frac0, frac1):
-        view = self.robot.root_physx_view
-        self._g_q.copy_(view.get_dof_positions()[:, self._jchain])
-        self._g_qd.copy_(view.get_dof_velocities()[:, self._jchain])
+        # Isaac Lab 3: the PhysX articulation view (warp frontend) reads / writes warp arrays
+        view = self.robot.root_view
+        self._g_q.copy_(wp.to_torch(view.get_dof_positions())[:, self._jchain])
+        self._g_qd.copy_(wp.to_torch(view.get_dof_velocities())[:, self._jchain])
         self._g_frac[0], self._g_frac[1] = frac0, frac1
         if self._cable_graph is not None:
             self._cable_graph.replay()
         else:
             self._cable_math()
-        view.set_dof_actuation_forces(self._efforts, self.robot._ALL_INDICES)
+        if self._efforts_wp is None:
+            self._efforts_wp = wp.from_torch(self._efforts)                     # same memory as _efforts
+        view.set_dof_actuation_forces(self._efforts_wp, self.robot._ALL_INDICES)
 
     def step(self, action: torch.Tensor):
         """VerticalPipeEnv.step with the motor / cable model integrated at every physics step."""
         action = action.to(self.device)
         self._pre_physics_step(action)
-        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors()
+        is_rendering = self.sim.is_rendering
         self._apply_action()
         self.scene.write_data_to_sim()
         dec = self.cfg.decimation
@@ -287,7 +292,7 @@ class CableVerticalPipeEnv(VerticalPipeEnv):
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(reset_env_ids) > 0 and self.auto_reset:
             self._reset_idx(reset_env_ids)
-            if self.sim.has_rtx_sensors() and self.cfg.num_rerenders_on_reset > 0:
+            if is_rendering and self.has_rtx_sensors and self.cfg.num_rerenders_on_reset > 0:
                 for _ in range(self.cfg.num_rerenders_on_reset):
                     self.sim.render()
         self.obs_buf = self._get_observations()
@@ -301,8 +306,8 @@ class CableVerticalPipeEnv(VerticalPipeEnv):
 
     def _update_drive_info(self):
         je = self._jelev[0]
-        q_e = self.robot.data.joint_pos[:, je].to(torch.float64)
-        v_e = self.robot.data.joint_vel[:, je].to(torch.float64)
+        q_e = self.robot.data.joint_pos.torch[:, je].to(torch.float64)
+        v_e = self.robot.data.joint_vel.torch[:, je].to(torch.float64)
         drive = C.ELEV_KP * (self.elev_cmd - q_e) - (C.ELEV_KV + C.JOINT_DAMPING) * v_e
         self.elev_torque = MT.elevator_torque(drive, v_e)
         m = self.motors
@@ -355,12 +360,12 @@ class CableVerticalPipeEnv(VerticalPipeEnv):
         self.motors.reset(idx, u)
         self.motor_cmd[idx] = u
         self._motor_cmd_prev[idx] = u
-        joint_pos = self.robot.data.default_joint_pos[idx].clone()
+        joint_pos = self.robot.data.default_joint_pos.torch[idx].clone()
         joint_pos[:, self._jchain] = q.to(self.device).float()
         joint_pos[:, self._jelev[0]] = self.elev_cmd[idx].float()
-        self.robot.write_joint_state_to_sim(joint_pos, torch.zeros_like(joint_pos), env_ids=idx)
+        self.robot.write_joint_state_to_sim_index(position=joint_pos, velocity=torch.zeros_like(joint_pos), env_ids=idx)
         self._write_targets()
-        self.robot.set_joint_position_target(self._targets[idx], env_ids=idx)
+        self.robot.actuators.target_command.set_position_index(value=self._targets[idx], env_ids=idx)
         q_dev = q.to(self.device)
         self.tension[idx] = self.cable_model.tension(q_dev, u)
         bend_meas = q_dev.view(-1, 3, 5, 2).sum(dim=2)
@@ -368,8 +373,8 @@ class CableVerticalPipeEnv(VerticalPipeEnv):
         pose = torch.zeros(len(idx), 7, device=self.device)
         pose[:, :2] = (self.pipe_xy[idx] + self.scene.env_origins[idx, :2].to(torch.float64)).float()
         pose[:, 2] = (self.z_top[idx] + self.scene.env_origins[idx, 2].to(torch.float64)).float()
-        pose[:, 3] = 1.0
-        self.pipe.write_root_pose_to_sim(pose, env_ids=idx)
+        pose[:, 6] = 1.0                                   # identity quaternion (x, y, z, w)
+        self.pipe.write_root_pose_to_sim_index(root_pose=pose, env_ids=idx)
 
     def snapshot(self):
         snap = super().snapshot()
@@ -545,8 +550,8 @@ class CableVerticalPipeEnv(VerticalPipeEnv):
         from isaaclab.utils.math import quat_apply
 
         n, dev = self.num_envs, self.device
-        pos_e = self.robot.data.body_link_pos_w[:, self._act_body]
-        quat_e = self.robot.data.body_link_quat_w[:, self._act_body][:, None].expand(n, 6, 4)
+        pos_e = self.robot.data.body_link_pos_w.torch[:, self._act_body]
+        quat_e = self.robot.data.body_link_quat_w.torch[:, self._act_body][:, None].expand(n, 6, 4)
         up_w = torch.tensor([0.0, 0.0, 1.0], device=dev)
         base = pos_e[:, None] + quat_apply(quat_e, self._act_base[None].expand(n, -1, -1))    # (N, 6, 3)
         L = self.CAD_SCREW_Z[1] - self.CAD_SCREW_Z[0]
@@ -556,10 +561,10 @@ class CableVerticalPipeEnv(VerticalPipeEnv):
         top = base + up_w * L
         angle = x / MT.CABLE_SCREW.lead * 2.0 * math.pi                                      # rotor angle
         flag_dir = torch.stack([torch.cos(angle), torch.sin(angle), torch.zeros_like(angle)], -1)
-        ident = torch.zeros(n, 6, 4, device=dev)
-        ident[..., 0] = 1.0
-        q_flag = torch.stack([torch.cos(angle / 2), torch.zeros_like(angle), torch.zeros_like(angle),
-                              torch.sin(angle / 2)], -1)
+        ident = torch.zeros(n, 6, 4, device=dev)                             # quaternions (x, y, z, w)
+        ident[..., 3] = 1.0
+        q_flag = torch.stack([torch.zeros_like(angle), torch.zeros_like(angle), torch.sin(angle / 2),
+                              torch.cos(angle / 2)], -1)
         sec = torch.as_tensor(CB.MOTOR_SECTION, device=dev)[None].expand(n, -1)
         parts = [
             (base + up_w * 0.5 * L, ident, torch.tensor([0.0065, 0.0065, L], device=dev), 8),  # screws (dark steel)
@@ -596,7 +601,7 @@ class CableVerticalPipeEnv(VerticalPipeEnv):
         length = torch.linalg.norm(v, dim=-1).clamp(min=1e-6)
         d = v / length[..., None]
         d = d * torch.where(d[..., 2:3] < 0.0, -1.0, 1.0)                        # a cylinder is symmetric
-        q = torch.stack([1.0 + d[..., 2], -d[..., 1], d[..., 0], torch.zeros_like(d[..., 0])], dim=-1)
+        q = torch.stack([-d[..., 1], d[..., 0], torch.zeros_like(d[..., 0]), 1.0 + d[..., 2]], dim=-1)   # (x, y, z, w)
         q = q / torch.linalg.norm(q, dim=-1, keepdim=True)
         scale = torch.ones_like(v)
         scale[..., 2] = length
@@ -606,8 +611,8 @@ class CableVerticalPipeEnv(VerticalPipeEnv):
         from isaaclab.utils.math import quat_apply
 
         n = self.num_envs
-        pos = self.robot.data.body_link_pos_w[:, self._mk_body]                  # (N, P, 3)
-        quat = self.robot.data.body_link_quat_w[:, self._mk_body]
+        pos = self.robot.data.body_link_pos_w.torch[:, self._mk_body]            # (N, P, 3)
+        quat = self.robot.data.body_link_quat_w.torch[:, self._mk_body]
         pts = pos + quat_apply(quat, self._mk_local[None].expand(n, -1, -1))
         tr, ori, scale = self._spans(pts[:, self._mk_a], pts[:, self._mk_b])      # (N, S, .)
         slack = self.tension < 0.05                                              # (N, 12)
