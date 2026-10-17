@@ -30,15 +30,17 @@ import os
 
 import numpy as np
 import torch
+import warp as wp
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import Articulation, ArticulationCfg, AssetBaseCfg, RigidObject, RigidObjectCfg
-from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg, ViewerCfg
+from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sim import PhysxCfg, SimulationCfg
+from isaaclab.sim import SimulationCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.math import matrix_from_quat
+from isaaclab_physx.physics import PhysxCfg
 
 import constants as C
 import mdp
@@ -57,6 +59,30 @@ SEG_NAMES = [f"Seg{i}" for i in range(1, 16)]
 # CONTACT_OFFSET; only points closer than cfg.contact_touch_tolerance count as touching.
 CONTACT_OFFSET = 0.002
 REST_OFFSET = 0.0
+
+# default scene view (env 0 frame)
+VIEW_EYE, VIEW_LOOKAT, VIEW_RESOLUTION = (0.56, -0.33, 0.80), (0.09, 0.21, 0.58), (1280, 720)
+
+
+def scene_view_cfg(eye=VIEW_EYE, lookat=VIEW_LOOKAT, resolution=VIEW_RESOLUTION, headless=True):
+    """
+    Kit viewport camera on env 0 (Isaac Lab 3 replacement of ViewerCfg). Put it in cfg.sim.visualizer_cfgs;
+    headless=False for the Isaac Sim window. scene_frame() reads its image.
+    """
+    from isaaclab_visualizers.kit import KitVisualizerCfg
+
+    return KitVisualizerCfg(eye=tuple(eye), lookat=tuple(lookat), origin_type="env", origin_env_index=0,
+                            window_width=int(resolution[0]), window_height=int(resolution[1]),
+                            background_color=None, headless=headless)
+
+
+def scene_frame(env):
+    """RGB image (H, W, 3) uint8 of the scene_view_cfg() camera (env.render() returns no image in Isaac Lab 3)."""
+    env.render()
+    for viz in env.sim.visualizers:
+        if viz.cfg.visualizer_type == "kit":
+            return viz.render_rgb_array()
+    raise RuntimeError("no Kit visualizer: add scene_view_cfg() to cfg.sim.visualizer_cfgs")
 
 
 @configclass
@@ -77,18 +103,18 @@ class VerticalPipeSceneCfg(InteractiveSceneCfg):
             ),
             collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=CONTACT_OFFSET, rest_offset=REST_OFFSET),
         ),
-        init_state=ArticulationCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0), rot=(1.0, 0.0, 0.0, 0.0),
+        init_state=ArticulationCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0),
                                                    joint_pos={".*": 0.0}, joint_vel={".*": 0.0}),
         actuators={
             # MuJoCo: force = kp (ctrl - q) - kv qdot, plus passive joint damping 0.5 -> drive damping kv + 0.5
             "bend": ImplicitActuatorCfg(
                 joint_names_expr=["Seg.*_[xy]"], stiffness=C.BEND_KP, damping=C.BEND_KV + C.JOINT_DAMPING,
-                effort_limit_sim=C.BEND_FORCE_LIMIT, velocity_limit_sim=1.0e4,
+                joint_effort_limit=C.BEND_FORCE_LIMIT, joint_velocity_limit=1.0e4,
                 armature=C.JOINT_ARMATURE, friction=0.0,
             ),
             "elevator": ImplicitActuatorCfg(
                 joint_names_expr=["Elevator_Joint"], stiffness=C.ELEV_KP, damping=C.ELEV_KV + C.JOINT_DAMPING,
-                effort_limit_sim=C.ELEV_FORCE_LIMIT, velocity_limit_sim=1.0e4,
+                joint_effort_limit=C.ELEV_FORCE_LIMIT, joint_velocity_limit=1.0e4,
                 armature=C.JOINT_ARMATURE, friction=0.0,
             ),
         },
@@ -108,7 +134,7 @@ class VerticalPipeSceneCfg(InteractiveSceneCfg):
         prim_path="/World/light", spawn=sim_utils.DomeLightCfg(intensity=900.0, color=(0.8, 0.82, 0.86)))
     sun: AssetBaseCfg = AssetBaseCfg(
         prim_path="/World/sun", spawn=sim_utils.DistantLightCfg(intensity=1500.0, color=(1.0, 0.97, 0.92), angle=2.0),
-        init_state=AssetBaseCfg.InitialStateCfg(rot=(0.8660254, 0.25, 0.0, 0.4330127)))
+        init_state=AssetBaseCfg.InitialStateCfg(rot=(0.25, 0.0, 0.4330127, 0.8660254)))   # (x, y, z, w)
 
 
 @configclass
@@ -143,10 +169,9 @@ class VerticalPipeEnvCfg(DirectRLEnvCfg):
         gravity=(0.0, 0.0, 0.0),
         physics_material=sim_utils.RigidBodyMaterialCfg(
             static_friction=C.CONTACT_FRICTION, dynamic_friction=C.CONTACT_FRICTION, restitution=0.0),
-        physx=PhysxCfg(solver_type=1, enable_stabilization=False),
+        physics=PhysxCfg(solver_type=1, enable_stabilization=False),
     )
     scene: VerticalPipeSceneCfg = VerticalPipeSceneCfg(num_envs=16, env_spacing=2.0, replicate_physics=False)
-    viewer: ViewerCfg = ViewerCfg(eye=(0.56, -0.33, 0.80), lookat=(0.09, 0.21, 0.58), origin_type="env", env_index=0)
 
     def __post_init__(self):
         super().__post_init__()
@@ -218,7 +243,11 @@ class VerticalPipeEnv(DirectRLEnv):
         self.is_success = torch.zeros(n, dtype=torch.bool, device=dev)
         self.failure = torch.zeros(n, dtype=torch.long, device=dev)
         self.last_obs = torch.zeros(n, mdp.OBS_DIM, device=dev)
-        self._write_root(self.robot._ALL_INDICES)
+        self._write_root(self.all_env_ids)
+
+    @property
+    def all_env_ids(self) -> torch.Tensor:
+        return torch.arange(self.num_envs, dtype=torch.long, device=self.device)
 
     # ------------------------------------------------------------------
     # Scene
@@ -249,12 +278,12 @@ class VerticalPipeEnv(DirectRLEnv):
         env (CONTACT_BODIES; one sensor pattern per segment, each paired with the same filter patterns).
         The env of every sensor row is read from its prim path.
         """
-        from isaacsim.core.simulation_manager import SimulationManager
+        from isaaclab_physx.physics import PhysxManager
 
-        ns = self.scene.env_regex_ns.replace(".*", "*")
+        ns = f"{self.scene.env_ns}/env_*"                  # glob for the PhysX tensor API
         patterns = [f"{ns}/Robot/base_link/{name}" for name in SEG_NAMES]
         filters = [[f"{ns}/{body}" for body in self.CONTACT_BODIES] for _ in SEG_NAMES]
-        view = SimulationManager.get_physics_sim_view().create_rigid_contact_view(
+        view = PhysxManager.get_physics_sim_view().create_rigid_contact_view(
             patterns, filter_patterns=filters, max_contact_data_count=64 * len(SEG_NAMES) * self.num_envs)
         if view.sensor_count != len(SEG_NAMES) * self.num_envs or view.filter_count != len(self.CONTACT_BODIES):
             raise RuntimeError(f"contact view: {view.sensor_count} sensors, {view.filter_count} filters")
@@ -280,7 +309,10 @@ class VerticalPipeEnv(DirectRLEnv):
     def _pipe_contacts(self):
         """Robot-pipe contact points of the last physics step -> (#inner-wall contacts, rim/outside hit)."""
         n = self.num_envs
-        _, points, _, separations, counts, starts = self._contact_view.get_contact_data(dt=self.physics_dt)
+        # Isaac Lab 3: the PhysX tensor views return warp arrays
+        _, points, _, separations, counts, starts = (
+            wp.to_torch(a) if isinstance(a, wp.array) else a
+            for a in self._contact_view.get_contact_data(dt=self.physics_dt))
         counts, starts = counts.view(-1).long(), starts.view(-1).long()
         total = int(counts.sum())
         if total == 0:
@@ -299,8 +331,8 @@ class VerticalPipeEnv(DirectRLEnv):
         # if it lies on the current collision cylinder of its segment (fresh points: within 1.03 mm of
         # max(separation, 0), measured over 4e5 points).
         body = self._seg_body_ids[seg]
-        local = torch.einsum("nji,nj->ni", matrix_from_quat(self.robot.data.body_link_quat_w[env_ids, body]),
-                             pts_w - self.robot.data.body_link_pos_w[env_ids, body])
+        local = torch.einsum("nji,nj->ni", matrix_from_quat(self.robot.data.body_link_quat_w.torch[env_ids, body]),
+                             pts_w - self.robot.data.body_link_pos_w.torch[env_ids, body])
         rho = torch.linalg.norm(local[:, :2], dim=1)
         dz = torch.clamp(torch.maximum(self._col_z0[seg] - local[:, 2], local[:, 2] - self._col_z1[seg]), min=0.0)
         dr = torch.clamp(rho - self._col_r[seg], min=0.0)
@@ -323,8 +355,8 @@ class VerticalPipeEnv(DirectRLEnv):
 
     def _measure(self, no_contact_ids=None):
         f64 = torch.float64
-        pos = self.robot.data.body_link_pos_w[:, self._seg_ids].to(f64) - self.scene.env_origins.to(f64)[:, None]
-        rot = matrix_from_quat(self.robot.data.body_link_quat_w[:, self._tip_body].to(f64))
+        pos = self.robot.data.body_link_pos_w.torch[:, self._seg_ids].to(f64) - self.scene.env_origins.to(f64)[:, None]
+        rot = matrix_from_quat(self.robot.data.body_link_quat_w.torch[:, self._tip_body].to(f64))
         n_inner, outer = self._pipe_contacts()
         if no_contact_ids is not None:
             n_inner[no_contact_ids] = 0
@@ -347,7 +379,7 @@ class VerticalPipeEnv(DirectRLEnv):
         """
         action = action.to(self.device)
         self._pre_physics_step(action)
-        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors()
+        is_rendering = self.sim.is_rendering
         self._apply_action()
         self.scene.write_data_to_sim()
         for _ in range(self.cfg.decimation):
@@ -365,7 +397,7 @@ class VerticalPipeEnv(DirectRLEnv):
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(reset_env_ids) > 0 and self.auto_reset:
             self._reset_idx(reset_env_ids)
-            if self.sim.has_rtx_sensors() and self.cfg.num_rerenders_on_reset > 0:
+            if is_rendering and self.has_rtx_sensors and self.cfg.num_rerenders_on_reset > 0:
                 for _ in range(self.cfg.num_rerenders_on_reset):
                     self.sim.render()
         self.obs_buf = self._get_observations()
@@ -393,7 +425,7 @@ class VerticalPipeEnv(DirectRLEnv):
         self._targets[:, self._jelev[0]] = self.elev_cmd.float()
 
     def _apply_action(self):
-        self.robot.set_joint_position_target(self._targets)
+        self.robot.actuators.target_command.set_position_index(value=self._targets)
 
     def _get_dones(self):
         self._in_get_dones = True
@@ -403,7 +435,7 @@ class VerticalPipeEnv(DirectRLEnv):
         self.max_depth = torch.maximum(self.max_depth, meas["depth"])
         self.contact_steps += (meas["n_inner"] > 0).long()
 
-        q, qd = self.robot.data.joint_pos, self.robot.data.joint_vel
+        q, qd = self.robot.data.joint_pos.torch, self.robot.data.joint_vel.torch
         unstable = (~torch.isfinite(q).all(dim=1)) | (~torch.isfinite(qd).all(dim=1)) \
             | (qd.abs() > self.cfg.unstable_joint_vel).any(dim=1)
         reward, pot, terminated, success, failure = mdp.step_reward(
@@ -441,7 +473,7 @@ class VerticalPipeEnv(DirectRLEnv):
 
     def _reset_idx(self, env_ids):
         if env_ids is None:
-            env_ids = self.robot._ALL_INDICES
+            env_ids = self.all_env_ids
         super()._reset_idx(env_ids)
         ids = env_ids.tolist() if isinstance(env_ids, torch.Tensor) else list(env_ids)
         k = len(ids)
@@ -486,9 +518,9 @@ class VerticalPipeEnv(DirectRLEnv):
         """
         root = torch.zeros(len(idx), 7, device=self.device)
         root[:, :3] = self.scene.env_origins[idx]
-        root[:, 3] = 1.0
-        self.robot.write_root_pose_to_sim(root, env_ids=idx)
-        self.robot.write_root_velocity_to_sim(torch.zeros(len(idx), 6, device=self.device), env_ids=idx)
+        root[:, 6] = 1.0                                   # identity quaternion (x, y, z, w)
+        self.robot.write_root_pose_to_sim_index(root_pose=root, env_ids=idx)
+        self.robot.write_root_velocity_to_sim_index(root_velocity=torch.zeros(len(idx), 6, device=self.device), env_ids=idx)
 
     def _write_state(self, idx):
         """Robot joints (at rest, targets = commands) and pipe pose of the given envs."""
@@ -496,14 +528,14 @@ class VerticalPipeEnv(DirectRLEnv):
         qpos = self.kin.qpos_from(self.bend_cmd[idx].cpu().numpy(), self.elev_cmd[idx].cpu().numpy())
         joint_pos = torch.zeros(len(idx), self.robot.num_joints, device=self.device)
         joint_pos[:, self._q_to_joint] = torch.as_tensor(qpos, dtype=torch.float32, device=self.device)
-        self.robot.write_joint_state_to_sim(joint_pos, torch.zeros_like(joint_pos), env_ids=idx)
+        self.robot.write_joint_state_to_sim_index(position=joint_pos, velocity=torch.zeros_like(joint_pos), env_ids=idx)
         self._write_targets()
-        self.robot.set_joint_position_target(self._targets[idx], env_ids=idx)
+        self.robot.actuators.target_command.set_position_index(value=self._targets[idx], env_ids=idx)
         pose = torch.zeros(len(idx), 7, device=self.device)
         pose[:, :2] = (self.pipe_xy[idx] + self.scene.env_origins[idx, :2].to(torch.float64)).float()
         pose[:, 2] = (self.z_top[idx] + self.scene.env_origins[idx, 2].to(torch.float64)).float()
-        pose[:, 3] = 1.0
-        self.pipe.write_root_pose_to_sim(pose, env_ids=idx)
+        pose[:, 6] = 1.0
+        self.pipe.write_root_pose_to_sim_index(root_pose=pose, env_ids=idx)
 
     # ------------------------------------------------------------------
     # Evaluation support: run evaluation episodes on the same sim, then put
@@ -514,8 +546,8 @@ class VerticalPipeEnv(DirectRLEnv):
 
     def snapshot(self):
         snap = {k: getattr(self, k).clone() for k in self._STATE_KEYS}
-        snap["joint_pos"] = self.robot.data.joint_pos.clone()
-        snap["joint_vel"] = self.robot.data.joint_vel.clone()
+        snap["joint_pos"] = self.robot.data.joint_pos.torch.clone()
+        snap["joint_vel"] = self.robot.data.joint_vel.torch.clone()
         snap["meas"] = {k: v.clone() for k, v in self._meas.items()}
         snap["rngs"] = [copy.deepcopy(r.bit_generator.state) for r in self._rngs]
         snap["assist_prob"] = self.assist_prob
@@ -528,16 +560,16 @@ class VerticalPipeEnv(DirectRLEnv):
         for r, state in zip(self._rngs, snap["rngs"]):
             r.bit_generator.state = state
         self.assist_prob = snap["assist_prob"]
-        idx = self.robot._ALL_INDICES
+        idx = self.all_env_ids
         self._write_root(idx)
-        self.robot.write_joint_state_to_sim(snap["joint_pos"], snap["joint_vel"], env_ids=idx)
+        self.robot.write_joint_state_to_sim_index(position=snap["joint_pos"], velocity=snap["joint_vel"], env_ids=idx)
         self._write_targets()
-        self.robot.set_joint_position_target(self._targets)
+        self.robot.actuators.target_command.set_position_index(value=self._targets)
         pose = torch.zeros(self.num_envs, 7, device=self.device)
         pose[:, :2] = (self.pipe_xy + self.scene.env_origins[:, :2].to(torch.float64)).float()
         pose[:, 2] = (self.z_top + self.scene.env_origins[:, 2].to(torch.float64)).float()
-        pose[:, 3] = 1.0
-        self.pipe.write_root_pose_to_sim(pose, env_ids=idx)
+        pose[:, 6] = 1.0
+        self.pipe.write_root_pose_to_sim_index(root_pose=pose, env_ids=idx)
         self.scene.write_data_to_sim()
 
     def set_eval(self, enabled: bool):
@@ -558,7 +590,7 @@ class VerticalPipeEnv(DirectRLEnv):
         theta = torch.linalg.norm(self.bend_cmd[i], dim=1).cpu().numpy()
         phi = np.mod(np.arctan2(self.bend_cmd[i, :, 1].cpu().numpy(), self.bend_cmd[i, :, 0].cpu().numpy()), 2 * np.pi)
         kappa = theta / C.SECTION_LENGTHS
-        elev = float(self.robot.data.joint_pos[i, self._jelev[0]])
+        elev = float(self.robot.data.joint_pos.torch[i, self._jelev[0]])
         return {
             "is_success": bool(self.is_success[i]),
             "failure": C.FAILURE_NAMES[int(self.failure[i])],

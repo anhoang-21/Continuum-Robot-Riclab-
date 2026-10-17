@@ -43,7 +43,7 @@ class VisionPipeSceneCfg(VerticalPipeSceneCfg):
     # which points out of the tip face (down the robot)
     tip_cam: TiledCameraCfg = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base_link/Seg15/TipCam",
-        offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, CAM_OFFSET), rot=(1.0, 0.0, 0.0, 0.0), convention="ros"),
+        offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, CAM_OFFSET), rot=(0.0, 0.0, 0.0, 1.0), convention="ros"),
         data_types=["rgb", "distance_to_image_plane"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=CAM_FOCAL,
@@ -96,18 +96,18 @@ class VisionPipeEnv(VerticalPipeEnv):
           K (N, 3, 3), cam_pos (N, 3) env frame, cam_rot (N, 3, 3) camera->env (ROS axes).
         """
         out = self.tip_cam.data.output
-        rgb = out["rgb"][..., :3].float() / 255.0
-        depth = out["distance_to_image_plane"][..., 0].float()
+        rgb = out["rgb"].torch[..., :3].float() / 255.0
+        depth = out["distance_to_image_plane"].torch[..., 0].float()
         depth = torch.nan_to_num(depth, nan=0.0, posinf=0.0, neginf=0.0)
         if self.cfg.rgb_noise_std > 0.0:
             rgb = torch.clamp(rgb + self.cfg.rgb_noise_std * torch.randn_like(rgb), 0.0, 1.0)
         if self.cfg.depth_noise_std > 0.0:
             depth = torch.where(depth > 0.0, depth + self.cfg.depth_noise_std * torch.randn_like(depth), depth)
         f64 = torch.float64
-        rot = matrix_from_quat(self.robot.data.body_link_quat_w[:, self._tip_body].to(f64))
-        pos = self.robot.data.body_link_pos_w[:, self._tip_body].to(f64) - self.scene.env_origins.to(f64)
+        rot = matrix_from_quat(self.robot.data.body_link_quat_w.torch[:, self._tip_body].to(f64))
+        pos = self.robot.data.body_link_pos_w.torch[:, self._tip_body].to(f64) - self.scene.env_origins.to(f64)
         cam_pos = pos + torch.einsum("nij,j->ni", rot, self._cam_offset)
-        return rgb, depth, self.tip_cam.data.intrinsic_matrices.to(f64), cam_pos, rot
+        return rgb, depth, self.tip_cam.data.intrinsic_matrices.torch.to(f64), cam_pos, rot
 
     # ------------------------------------------------------------------
     # Estimated pipe pose

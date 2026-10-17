@@ -66,13 +66,13 @@ class OverviewCamera:
         self.K = np.array([[self.fx, 0.0, self.WIDTH / 2.0], [0.0, self.fx, self.HEIGHT / 2.0], [0.0, 0.0, 1.0]])
 
     def quat(self):
-        """(w, x, y, z) of `rot`."""
+        """(x, y, z, w) of `rot` (Isaac Lab 3 quaternion order)."""
         m = self.rot
         w = math.sqrt(max(0.0, 1.0 + m[0, 0] + m[1, 1] + m[2, 2])) / 2.0
         x = math.copysign(math.sqrt(max(0.0, 1.0 + m[0, 0] - m[1, 1] - m[2, 2])) / 2.0, m[2, 1] - m[1, 2])
         y = math.copysign(math.sqrt(max(0.0, 1.0 - m[0, 0] + m[1, 1] - m[2, 2])) / 2.0, m[0, 2] - m[2, 0])
         z = math.copysign(math.sqrt(max(0.0, 1.0 - m[0, 0] - m[1, 1] + m[2, 2])) / 2.0, m[1, 0] - m[0, 1])
-        return (w, x, y, z)
+        return (x, y, z, w)
 
     def project(self, p):
         """env-frame points (..., 3) -> pixel coordinates (..., 2)."""

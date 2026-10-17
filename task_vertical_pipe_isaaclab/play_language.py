@@ -41,7 +41,8 @@ parser.add_argument("--student", type=str, default=os.path.join("models", "stude
 parser.add_argument("--episodes", type=int, default=100)
 parser.add_argument("--num_envs", "--num-envs", dest="num_envs", type=int, default=8)
 parser.add_argument("--seed", type=int, default=7000)
-parser.add_argument("--vlm-device", default="cuda", help="where the VLM runs when loaded in this process")
+parser.add_argument("--vlm-device", default="cpu",
+                    help="where the VLM runs when loaded in this process (cpu: Isaac Sim 6.2 + the VLM do not fit in 8 GB)")
 parser.add_argument("--vlm-model", default="2b", help="2b | 4b (when loaded in this process)")
 parser.add_argument("--vlm-url", default="", help="use a vlm.py --serve server, e.g. http://127.0.0.1:8765/ground")
 parser.add_argument("--p-position", type=float, default=0.5, help="share of position instructions")
@@ -60,9 +61,10 @@ if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
 args.interactive = args.interactive or args.ui
-args.enable_cameras = True
-args.headless = args.headless or not args.interactive
-app = AppLauncher(args).app
+# Isaac Lab 3: no --headless / --enable_cameras flags; the window opens only with a Kit visualizer
+# (scene_view_cfg in make_env), and the launcher's own "video" option is not --video of this script
+app = AppLauncher({**vars(args), "enable_cameras": True, "headless": not args.interactive, "video": False,
+                   "visualizer_intent": {"has_kit_visualizer": args.interactive}}).app
 
 import cv2  # noqa: E402
 
@@ -71,6 +73,7 @@ from language_pipeline import LOCATE, PHASE_NAMES, LanguageInsertController  # n
 from multi_pipe_env import MultiPipeEnv, MultiPipeEnvCfg  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
 from student_policy import load_student  # noqa: E402
+from vertical_pipe_env import scene_frame, scene_view_cfg  # noqa: E402
 from vision_pipeline import GIVE_UP  # noqa: E402
 
 # scene camera (resolution, lookat, eye) and width of the right column, per --view (same views as play_vision.py)
@@ -89,8 +92,25 @@ def make_env(n, render):
     cfg.p_position = args.p_position
     cfg.sim.device = args.device
     if render or args.interactive:
-        cfg.viewer.resolution, cfg.viewer.lookat, cfg.viewer.eye = VIEW
-    return MultiPipeEnv(cfg, render_mode="rgb_array" if render else None)
+        resolution, lookat, eye = VIEW
+        cfg.sim.visualizer_cfgs = [scene_view_cfg(eye, lookat, resolution, headless=not args.interactive)]
+    return MultiPipeEnv(cfg)
+
+
+class Mp4Writer:
+    """H.264 MP4 through imageio-ffmpeg (the OpenCV of env_isaacsim62 has no video I/O); write() takes BGR frames."""
+
+    def __init__(self, path, fps, size):
+        import imageio_ffmpeg
+
+        self._gen = imageio_ffmpeg.write_frames(path, size, fps=fps, codec="libx264", pix_fmt_out="yuv420p")
+        self._gen.send(None)
+
+    def write(self, bgr):
+        self._gen.send(np.ascontiguousarray(bgr[..., ::-1]))
+
+    def release(self):
+        self._gen.close()
 
 
 def make_ground_fn():
@@ -146,7 +166,7 @@ def tip_and_info_panel(env, ctrl, i, h, result):
              ("VLM time", f"{ctrl.vlm_seconds[i]:.1f} s" if ctrl.answer[i] else "-"),
              ("grounding", {"right": "correct pipe", "wrong": "WRONG pipe", "none": "no box", "": "-"}[ctrl.grounding[i]]),
              ("insertion", "image-based student"),
-             ("elevator", f"{float(env.robot.data.joint_pos[i, env._jelev[0]]) * 1000:+.0f} mm")]
+             ("elevator", f"{float(env.robot.data.joint_pos.torch[i, env._jelev[0]]) * 1000:+.0f} mm")]
     y = 26 if compact else 36
     for k, v in lines:
         if compact:
@@ -166,7 +186,7 @@ def tip_and_info_panel(env, ctrl, i, h, result):
 
 
 def frame(env, ctrl, i, ep, n_eps, step, result):
-    scene = cv2.cvtColor(np.ascontiguousarray(env.render()), cv2.COLOR_RGB2BGR)
+    scene = cv2.cvtColor(np.ascontiguousarray(scene_frame(env)), cv2.COLOR_RGB2BGR)
     scene = cv2.resize(scene, VIEW[0])
     overlay = scene.copy()
     cv2.rectangle(overlay, (10, 10), (650, 84), (18, 20, 26), -1)
@@ -296,10 +316,10 @@ def main():
     writer, out = None, ""
     if args.video:
         for _ in range(3):
-            env.render()
+            scene_frame(env)
         out = args.output or os.path.join(TASK_DIR, "videos", f"language_{args.view}.mp4")
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-        writer = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), 25.0, (VIEW[0][0] + PANEL_W, VIEW[0][1]))
+        writer = Mp4Writer(out, 25.0, (VIEW[0][0] + PANEL_W, VIEW[0][1]))
     results, steps, t0 = [], np.zeros(n, dtype=int), time.time()
     while len(results) < args.episodes:
         obs, _, _, _, extras = env.step(ctrl.step_actions(obs))

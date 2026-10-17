@@ -108,7 +108,7 @@ class MultiPipeEnv(VisionPipeEnv):
         if not getattr(self, "_multi_ready", False):
             return super()._reset_idx(env_ids)
         if env_ids is None:
-            env_ids = self.robot._ALL_INDICES
+            env_ids = self.all_env_ids
         DirectRLEnv._reset_idx(self, env_ids)
         ids = env_ids.tolist() if isinstance(env_ids, torch.Tensor) else list(env_ids)
         k = len(ids)
@@ -138,8 +138,8 @@ class MultiPipeEnv(VisionPipeEnv):
                 pose[j, :2] = torch.as_tensor(sc.pipe_xy[other], dtype=torch.float32, device=self.device)
                 pose[j, 2] = float(sc.z_top[other])
             pose[:, :3] += origins
-            pose[:, 3] = 1.0
-            obj.write_root_pose_to_sim(pose, env_ids=idx)
+            pose[:, 6] = 1.0                               # identity quaternion (x, y, z, w)
+            obj.write_root_pose_to_sim_index(root_pose=pose, env_ids=idx)
 
     def _paint(self, ids, rngs):
         """Tube (and lower collar) colours of the three pipes, per env, on the USD stage."""
@@ -180,6 +180,6 @@ class MultiPipeEnv(VisionPipeEnv):
     def overview_camera(self):
         """rgb (N, H, W, 3) [0, 1], depth (N, H, W) m, K (3, 3), cam_pos (3,) and cam_rot (3, 3) in the env frame."""
         out = self.overview_cam.data.output
-        rgb = out["rgb"][..., :3].float() / 255.0
-        depth = torch.nan_to_num(out["distance_to_image_plane"][..., 0].float(), nan=0.0, posinf=0.0, neginf=0.0)
+        rgb = out["rgb"].torch[..., :3].float() / 255.0
+        depth = torch.nan_to_num(out["distance_to_image_plane"].torch[..., 0].float(), nan=0.0, posinf=0.0, neginf=0.0)
         return rgb, depth, self.overview.K, self.overview.EYE, self.overview.rot
