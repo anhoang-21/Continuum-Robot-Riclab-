@@ -28,21 +28,21 @@ import rsl_rl  # noqa: F401
 TASK_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TASK_DIR)
 
-from isaaclab.app import AppLauncher  # noqa: E402
+from isaac_app import add_app_args, launch  # noqa: E402
 
 parser = argparse.ArgumentParser(description="Stage 5 demo video with the command window")
 parser.add_argument("--student", default=os.path.join("models", "student_multi", "final.pt"))
 parser.add_argument("--episodes", type=int, default=4)
 parser.add_argument("--seed", type=int, default=7300)
 parser.add_argument("--output", default=os.path.join(TASK_DIR, "videos", "ui_demo.mp4"))
-AppLauncher.add_app_launcher_args(parser)
+add_app_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
 args.enable_cameras = True
 args.headless = True
-app = AppLauncher(args).app
+app = launch(args, view=True)
 
 import re  # noqa: E402
 import subprocess  # noqa: E402
@@ -51,6 +51,7 @@ import cv2  # noqa: E402
 import imageio_ffmpeg  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
+import isaac_app  # noqa: E402
 from language_pipeline import PHASE_NAMES, LanguageInsertController  # noqa: E402
 from multi_pipe import PALETTE  # noqa: E402
 from multi_pipe_env import MultiPipeEnv, MultiPipeEnvCfg  # noqa: E402
@@ -247,8 +248,8 @@ def main():
     cfg.scene.num_envs = 1
     cfg.seed = args.seed
     cfg.sim.device = args.device
-    cfg.viewer.resolution, cfg.viewer.eye, cfg.viewer.lookat = (SCENE_W, SCENE_H), EYE, TARGET
-    env = MultiPipeEnv(cfg, render_mode="rgb_array")
+    isaac_app.set_viewer(cfg, resolution=(SCENE_W, SCENE_H), eye=EYE, lookat=TARGET)
+    env = MultiPipeEnv(cfg)
     student = load_student(os.path.join(TASK_DIR, args.student), device=env.device)
     ctrl = LanguageInsertController(env, student, grounder.ground, follow_choice=True)
     env.auto_reset = False
@@ -278,7 +279,7 @@ def main():
 
     obs, _ = env.reset()
     for _ in range(3):
-        env.render()
+        isaac_app.grab(env)
     for ep in range(args.episodes):
         if ep > 0:
             obs = env.reset_envs([0])
@@ -290,15 +291,15 @@ def main():
         # same viewing direction as the Isaac window, centred on the three pipes of this scene
         look = np.array([*sc.pipe_xy.mean(axis=0), TARGET[2] + 0.03])
         eye = look + 0.7 * (np.array(EYE) - np.array(TARGET))            # inside the frame: no post in the way
-        env.viewport_camera_controller.update_view_location(eye=tuple(eye), lookat=tuple(look))
+        isaac_app.look_at_env(env, 0, eye, look)
         for _ in range(3):
-            env.render()
+            isaac_app.grab(env)
         u.colors = [sc.colors[j] for j in np.argsort(sc.image_x)]
         u.state = {"status": "ready: type an instruction", "phase": "-", "VLM box (0-1000)": "-", "chosen pipe": "-",
                    "result": "-"}
         u.text, u.busy = "", False
         view.update(box=None, ring=None, phase="")
-        scene = env.render()
+        scene = isaac_app.grab(env)
         for k in range(int(1.0 * FPS)):                   # new scene
             u.cursor = (k // 12) % 2 == 0
             write(scene)
@@ -340,7 +341,7 @@ def main():
                 ring = np.stack([dd.pipe_xy[0] + 0.0345 * np.cos(a), dd.pipe_xy[1] + 0.0345 * np.sin(a),
                                  np.full_like(a, dd.z_top)], axis=1)
                 view["ring"] = env.overview.project(ring)
-            scene = env.render()
+            scene = isaac_app.grab(env)
             write(scene)
         result = "THROUGH THE PIPE!" if name == "success" else name.upper().replace("_", " ")
         u.state.update(result=result, status="done")

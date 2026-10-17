@@ -42,7 +42,7 @@ class StudentPipeEnv(VisionPipeEnv):
         if not getattr(self, "student_starts", False):
             return super()._reset_idx(env_ids)
         if env_ids is None:
-            env_ids = self.robot._ALL_INDICES
+            env_ids = self._all_ids
         # DirectRLEnv bookkeeping only (VerticalPipeEnv._reset_idx would sample the task's own starts)
         DirectRLEnv._reset_idx(self, env_ids)
         ids = env_ids.tolist() if isinstance(env_ids, torch.Tensor) else list(env_ids)

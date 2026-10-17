@@ -74,6 +74,11 @@ class OverviewCamera:
         z = math.copysign(math.sqrt(max(0.0, 1.0 - m[0, 0] - m[1, 1] + m[2, 2])) / 2.0, m[1, 0] - m[0, 1])
         return (w, x, y, z)
 
+    def quat_xyzw(self):
+        """(x, y, z, w) of `rot` (the quaternion order of Isaac Lab 3)."""
+        w, x, y, z = self.quat()
+        return (x, y, z, w)
+
     def project(self, p):
         """env-frame points (..., 3) -> pixel coordinates (..., 2)."""
         pc = (np.asarray(p) - self.EYE) @ self.rot

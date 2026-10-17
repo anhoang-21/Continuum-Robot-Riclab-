@@ -31,7 +31,7 @@ import rsl_rl  # noqa: F401
 TASK_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TASK_DIR)
 
-from isaaclab.app import AppLauncher  # noqa: E402
+from isaac_app import add_app_args, launch  # noqa: E402
 
 parser = argparse.ArgumentParser(description="Tip camera search + RL insertion through a vertical pipe")
 parser.add_argument("--checkpoint", type=str, default=os.path.join("models", "mujoco_ppo_vpipe_wide", "model.pt"))
@@ -54,18 +54,19 @@ parser.add_argument("--view", choices=["wide", "close"], default="wide",
                          "portrait, with a joint gauge; close = near the pipe")
 parser.add_argument("--output", type=str, default="")
 parser.add_argument("--hold", type=float, default=1.0, help="video: seconds to hold the end of each episode")
-AppLauncher.add_app_launcher_args(parser)
+add_app_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
 args.enable_cameras = True
 args.headless = True
-app = AppLauncher(args).app
+app = launch(args, view=args.video)
 
 import cv2  # noqa: E402
 
 import constants as C  # noqa: E402
+import isaac_app  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
 from vision_env import VisionPipeEnv, VisionPipeEnvCfg  # noqa: E402
 from vision_pipeline import GIVE_UP, INSERT, PHASE_NAMES, SearchInsertController, load_actor  # noqa: E402
@@ -97,10 +98,8 @@ def make_env(modes, num_envs, render, meshes):
     cfg.sim.device = args.device
     if render:
         res, lookat, eye = VIEWS[args.view]
-        cfg.viewer.resolution = res
-        cfg.viewer.lookat = tuple(float(v) for v in lookat)
-        cfg.viewer.eye = tuple(float(v) for v in eye)
-    return VisionPipeEnv(cfg, render_mode="rgb_array" if render else None)
+        isaac_app.set_viewer(cfg, eye=eye, lookat=lookat, resolution=res)
+    return VisionPipeEnv(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -158,8 +157,8 @@ def gauge_panel(env, ctrl, i):
     img = np.full((GAUGE_H, CAM_PANEL, 3), (26, 24, 20), dtype=np.uint8)
     font = cv2.FONT_HERSHEY_SIMPLEX
     j = env._jelev[0]
-    q = float(env.robot.data.joint_pos[i, j])
-    qd = float(env.robot.data.joint_vel[i, j])
+    q = float(env.robot.data.joint_pos.torch[i, j])
+    qd = float(env.robot.data.joint_vel.torch[i, j])
     cmd = float(env.elev_cmd[i])
     lo, hi = C.ELEV_RANGE
     cv2.putText(img, "PRISMATIC JOINT (elevator: lead screw lifts the whole robot + tower)", (14, 28), font, 0.5,
@@ -181,7 +180,7 @@ def gauge_panel(env, ctrl, i):
 
 
 def scene_panel(env, ctrl, i, ep, n_eps, step, finished):
-    frame = cv2.cvtColor(np.ascontiguousarray(env.render()), cv2.COLOR_RGB2BGR)
+    frame = cv2.cvtColor(isaac_app.grab(env), cv2.COLOR_RGB2BGR)
     frame = cv2.resize(frame, (VIEW_W, VIEW_H))
     font = cv2.FONT_HERSHEY_SIMPLEX
     overlay = frame.copy()
@@ -224,7 +223,7 @@ def run(actor, modes):
     ctrl.reset(range(n))
     if video:                                   # the first viewport image comes out black
         for _ in range(3):
-            env.render()
+            isaac_app.grab(env)
     writer, out = None, ""
     if video:
         tag = "student" if args.student else "vision"
@@ -238,7 +237,7 @@ def run(actor, modes):
     while any(len(results[m]) < args.episodes for m in modes):
         if video and len(results[modes[k]]) >= args.episodes:
             k += 1
-            env.viewport_camera_controller.set_view_env_index(k)
+            isaac_app.follow_env(env, k)
         obs, _, _, _, extras = env.step(ctrl.step_actions(obs))
         steps += 1
         outcome = extras["done_info"]["outcome"].cpu().numpy()

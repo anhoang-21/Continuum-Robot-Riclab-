@@ -31,7 +31,7 @@ import tensordict  # noqa: F401  (Windows: load DLLs before Kit)
 TASK_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, TASK_DIR)
 
-from isaaclab.app import AppLauncher  # noqa: E402
+from isaac_app import add_app_args, launch  # noqa: E402
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--reference", default=os.path.join(TASK_DIR, "tests", "data", "mujoco_reference.npz"))
@@ -40,12 +40,12 @@ parser.add_argument("--touch-tol", type=float, default=None, help="override cfg.
 parser.add_argument("--rim-tol", type=float, nargs="*", default=None,
                     help="override cfg.rim_touch_tolerance (m); several values = replay once per value")
 parser.add_argument("--only-replay", action="store_true")
-AppLauncher.add_app_launcher_args(parser)
+add_app_args(parser)
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
 args.headless = True
-app = AppLauncher(args).app
+app = launch(args)
 
 import constants as C  # noqa: E402
 from reset_logic import ResetSampler  # noqa: E402
@@ -66,9 +66,9 @@ def check_kinematics(env, trials=10):
         q = rng.uniform(kin.joint_range[:, 0], kin.joint_range[:, 1], size=(env.num_envs, kin.nq))
         joint_pos = torch.zeros(env.num_envs, env.robot.num_joints, device=env.device)
         joint_pos[:, env._q_to_joint] = torch.as_tensor(q, dtype=torch.float32, device=env.device)
-        env.robot.write_joint_state_to_sim(joint_pos, torch.zeros_like(joint_pos))
-        pos = (env.robot.data.body_link_pos_w - env.scene.env_origins[:, None]).cpu().double().numpy()
-        rot = matrix_from_quat(env.robot.data.body_link_quat_w.double()).cpu().numpy()
+        env.write_joint_state(joint_pos, torch.zeros_like(joint_pos))
+        pos = (env.robot.data.body_link_pos_w.torch - env.scene.env_origins[:, None]).cpu().double().numpy()
+        rot = matrix_from_quat(env.robot.data.body_link_quat_w.torch.double()).cpu().numpy()
         xpos, xmat = kin.forward(q)
         worst_p = max(worst_p, np.abs(pos[:, isaac_ids] - xpos[:, kin_ids]).max())
         worst_r = max(worst_r, np.abs(rot[:, isaac_ids] - xmat[:, kin_ids]).max())
@@ -84,7 +84,7 @@ def check_resets(env):
     env._rngs = [np.random.default_rng(env.cfg.seed + i) for i in range(env.num_envs)]
     env.reset()
     worst = 0.0
-    jp = env.robot.data.joint_pos.cpu().double().numpy()
+    jp = env.robot.data.joint_pos.torch.cpu().double().numpy()
     for i in range(env.num_envs):
         sampler = ResetSampler(env.kin, env.env_modes[i], env.cfg.pipe_height, env.cfg.random_offset)
         st = sampler.sample(np.random.default_rng(env.cfg.seed + i), 0.4)
@@ -92,7 +92,7 @@ def check_resets(env):
         worst = max(worst, np.abs(env.pipe_xy[i].cpu().numpy() - st.pipe_xy).max(), abs(float(env.z_top[i]) - st.z_top),
                     np.abs(env.bend_cmd[i].cpu().numpy() - st.bend).max(),
                     np.abs(jp[i, env._q_to_joint.cpu().numpy()] - q).max())
-        pipe_pos = env.pipe.data.root_pos_w[i] - env.scene.env_origins[i]
+        pipe_pos = env.pipe.data.root_pos_w.torch[i] - env.scene.env_origins[i]
         worst = max(worst, float(torch.abs(pipe_pos[:2].double() - env.pipe_xy[i]).max()), abs(float(pipe_pos[2]) - float(env.z_top[i])))
     print(f"[2] resets: {env.num_envs} envs ({sum(m == 'rig' for m in env.env_modes)} rig), "
           f"{int(env.assisted.sum())} assisted starts, max difference to the MuJoCo sampler {worst:.2e}")

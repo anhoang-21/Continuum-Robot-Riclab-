@@ -26,7 +26,7 @@ import rsl_rl  # noqa: F401
 TASK_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TASK_DIR)
 
-from isaaclab.app import AppLauncher  # noqa: E402
+from isaac_app import add_app_args, launch  # noqa: E402
 
 parser = argparse.ArgumentParser(description="Record a two-panel MP4 of the policy in Isaac Sim")
 parser.add_argument("--checkpoint", type=str, default=os.path.join("models", "mujoco_ppo_vpipe_wide", "model.pt"))
@@ -41,18 +41,20 @@ parser.add_argument("--height", type=int, default=800)
 parser.add_argument("--cam-azimuth", type=float, default=0.0, help="azimuth of the fixed wide camera (deg, MuJoCo convention)")
 parser.add_argument("--cam-distance", type=float, default=0.8)
 parser.add_argument("--output", type=str, default="")
-AppLauncher.add_app_launcher_args(parser)
+add_app_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
 args.headless = True
 args.enable_cameras = True
-app = AppLauncher(args).app
+app = launch(args, view=True)       # the Kit visualizer draws the markers and renders the frames
 
 import cv2  # noqa: E402
+from isaaclab.sim.utils import enable_extension  # noqa: E402
+
+enable_extension("omni.replicator.core")
 import omni.replicator.core as rep  # noqa: E402
-from isaacsim.core.utils.viewports import set_camera_view  # noqa: E402
 from pxr import Gf, UsdGeom  # noqa: E402
 from tensordict import TensorDict  # noqa: E402
 from rsl_rl.models import MLPModel  # noqa: E402
@@ -61,6 +63,7 @@ import isaaclab.sim as sim_utils  # noqa: E402
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg  # noqa: E402
 
 import constants as C  # noqa: E402
+import isaac_app  # noqa: E402
 from agent_cfg import make_agent_cfg  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
 from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg  # noqa: E402
@@ -98,17 +101,22 @@ class Camera:
         cam.CreateVerticalApertureAttr(v_ap)
         cam.CreateHorizontalApertureAttr(v_ap * width / height)
         cam.CreateClippingRangeAttr(Gf.Vec2f(0.01, 100.0))
-        self.path = path
+        self.stage, self.path = stage, path
         self.product = rep.create.render_product(path, (width, height))
         self.annotator = rep.AnnotatorRegistry.get_annotator("rgb", device="cpu")
         self.annotator.attach([self.product])
         self.width, self.height = width, height
 
     def look(self, eye, target):
-        set_camera_view(eye=np.asarray(eye, dtype=float), target=np.asarray(target, dtype=float), camera_prim_path=self.path)
+        isaac_app.set_camera_look_at(self.stage, self.path, eye, target)
 
     def image(self):
         data = self.annotator.get_data()
+        if isinstance(data, dict):
+            data = data.get("data")
+        data = None if data is None else np.asarray(data, dtype=np.uint8)
+        if data is not None and data.ndim == 1 and data.size:
+            data = data.reshape(self.height, self.width, -1)
         if data is None or data.size == 0:
             return np.zeros((self.height, self.width, 3), dtype=np.uint8)
         return cv2.cvtColor(np.ascontiguousarray(data[:, :, :3]), cv2.COLOR_RGB2BGR)
@@ -214,6 +222,7 @@ def main():
     cfg.assist_prob = 0.0
     cfg.visual = True
     cfg.sim.device = args.device
+    isaac_app.set_viewer(cfg, resolution=(320, 180))         # its own image is not used
     env = VerticalPipeEnv(cfg)
     env.auto_reset = False
 
@@ -245,7 +254,7 @@ def main():
 
     def grab(ep, step, successes, finished):
         update_markers(markers, env, finished)
-        env.sim.render()
+        isaac_app.grab(env)                                          # renders all cameras
         left = draw_hud(wide.image(), env, ep, args.episodes, step, successes, finished, panel_w)
         right = near.image()
         overlay = right.copy()
@@ -268,7 +277,7 @@ def main():
             if ep == 1:
                 for _ in range(20):                                   # let the renderer load the meshes
                     update_markers(markers, env, "")
-                    env.sim.render()
+                    isaac_app.grab(env)
             step, finished = 0, ""
             frame = grab(ep, step, successes, finished)
             writer.write(frame)

@@ -32,7 +32,7 @@ import rsl_rl  # noqa: F401
 TASK_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TASK_DIR)
 
-from isaaclab.app import AppLauncher  # noqa: E402
+from isaac_app import add_app_args, launch  # noqa: E402
 
 parser = argparse.ArgumentParser(description="Play a trained PPO policy: continuum robot through a vertical pipe")
 parser.add_argument("--checkpoint", type=str, default="", help="rsl_rl .pt (default: models/ppo_vpipe/best_model.pt)")
@@ -51,7 +51,7 @@ parser.add_argument("--output", type=str, default="", help="MP4 path (default vi
 parser.add_argument("--slowdown", type=float, default=1.0, help=">1 plays slower than real time")
 parser.add_argument("--hold", type=float, default=1.2, help="seconds to hold the final pose of each episode")
 parser.add_argument("--no-meshes", action="store_true", help="show the collision cylinders instead of the CAD meshes")
-AppLauncher.add_app_launcher_args(parser)
+add_app_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
@@ -59,12 +59,13 @@ args, _ = parser.parse_known_args()
 if args.video:
     args.enable_cameras = True
     args.headless = True
-app = AppLauncher(args).app
+app = launch(args, view=args.video or not args.headless)
 
 from tensordict import TensorDict  # noqa: E402
 from rsl_rl.models import MLPModel  # noqa: E402
 
 import constants as C  # noqa: E402
+import isaac_app  # noqa: E402
 from agent_cfg import make_agent_cfg  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
 from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg  # noqa: E402
@@ -99,7 +100,7 @@ def load_actor(path):
     return actor
 
 
-def make_env(modes, num_envs, visual, render_mode=None):
+def make_env(modes, num_envs, visual):
     cfg = VerticalPipeEnvCfg()
     cfg.scene.num_envs = num_envs
     cfg.pipe_modes = tuple(modes)
@@ -111,8 +112,8 @@ def make_env(modes, num_envs, visual, render_mode=None):
     cfg.scene.env_spacing = args.env_spacing
     cfg.sim.device = args.device
     if args.video:
-        cfg.viewer.resolution = (1280, 720)
-    return VerticalPipeEnv(cfg, render_mode=render_mode)
+        isaac_app.set_viewer(cfg, resolution=(1280, 720))
+    return VerticalPipeEnv(cfg)
 
 
 def act(actor, obs, env):
@@ -197,8 +198,7 @@ def run_live(actor, modes):
     shown one after the other like the MuJoCo demo: the camera (window or MP4) follows env k while its
     episodes are counted; the other env keeps running the policy in the background.
     """
-    render_mode = "rgb_array" if args.video else None
-    env = make_env(modes, len(modes), visual=not args.no_meshes, render_mode=render_mode)
+    env = make_env(modes, len(modes), visual=not args.no_meshes)
     writer, out = None, ""
     if args.video:
         import cv2
@@ -209,8 +209,7 @@ def run_live(actor, modes):
     env.auto_reset = False                      # keep the final pose on screen, then reset explicitly
     obs, _ = env.reset()
     for k, mode in enumerate(modes):
-        if env.viewport_camera_controller is not None:
-            env.viewport_camera_controller.set_view_env_index(k)
+        isaac_app.follow_env(env, k)
         successes = 0
         for ep in range(1, args.episodes + 1):
             print(f"\n--- [{mode}] episode {ep}/{args.episodes} | pipe top at "
@@ -237,7 +236,7 @@ def run_live(actor, modes):
                                      f"contacts {info['contact_steps']:3d} | elevator {info['elevator_mm']:+6.1f} mm ")
                 if writer is not None:
                     import cv2
-                    frame = cv2.cvtColor(np.ascontiguousarray(env.render()), cv2.COLOR_RGB2BGR)
+                    frame = cv2.cvtColor(isaac_app.grab(env), cv2.COLOR_RGB2BGR)
                     frame = draw_hud(cv2, frame, env, k, ep, args.episodes, step, successes, finished)
                     for _ in range(int(args.hold * 50 / args.slowdown) if done else 1):
                         writer.write(frame)
@@ -266,15 +265,11 @@ def run_many(actor, modes, n):
     pipe mode i % #modes) and the camera looks at the whole grid. Stops when every pipe mode has
     --episodes finished episodes.
     """
-    render_mode = "rgb_array" if args.video else None
-    env = make_env(modes, n, visual=not args.no_meshes, render_mode=render_mode)
-    if env.viewport_camera_controller is not None:
-        origins = env.scene.env_origins.cpu().numpy()
-        centre = origins.mean(axis=0) + np.array([0.09, 0.21, 0.55])        # middle of the robot / pipe area
-        extent = float(np.abs(origins[:, :2] - origins[:, :2].mean(axis=0)).max()) + 1.0
-        env.viewport_camera_controller.update_view_to_world()
-        env.viewport_camera_controller.update_view_location(
-            eye=centre + np.array([1.3 * extent, -1.3 * extent, 0.9 * extent]), lookat=centre)
+    env = make_env(modes, n, visual=not args.no_meshes)
+    origins = env.scene.env_origins.cpu().numpy()
+    centre = origins.mean(axis=0) + np.array([0.09, 0.21, 0.55])            # middle of the robot / pipe area
+    extent = float(np.abs(origins[:, :2] - origins[:, :2].mean(axis=0)).max()) + 1.0
+    isaac_app.look_at(env, eye=centre + np.array([1.3 * extent, -1.3 * extent, 0.9 * extent]), lookat=centre)
     writer, out = None, ""
     if args.video:
         import cv2
@@ -301,7 +296,7 @@ def run_many(actor, modes, n):
             steps[i] = 0
         if writer is not None:
             import cv2
-            frame = cv2.cvtColor(np.ascontiguousarray(env.render()), cv2.COLOR_RGB2BGR)
+            frame = cv2.cvtColor(isaac_app.grab(env), cv2.COLOR_RGB2BGR)
             text = f"{n} robots | " + " | ".join(
                 f"{m}: {results[m].count('success')}/{len(results[m])} success" for m in modes)
             cv2.putText(frame, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (20, 20, 20), 2, cv2.LINE_AA)

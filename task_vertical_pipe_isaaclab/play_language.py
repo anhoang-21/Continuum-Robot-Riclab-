@@ -34,7 +34,7 @@ import rsl_rl  # noqa: F401
 TASK_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TASK_DIR)
 
-from isaaclab.app import AppLauncher  # noqa: E402
+from isaac_app import add_app_args, launch  # noqa: E402
 
 parser = argparse.ArgumentParser(description="Language-conditioned pipe insertion with a local VLM")
 parser.add_argument("--student", type=str, default=os.path.join("models", "student_multi", "final.pt"))
@@ -54,7 +54,7 @@ parser.add_argument("--view", choices=["close", "wide"], default="close",
                     help="video scene view: close = near the pipes (as play_vision.py --view close), wide = whole rig")
 parser.add_argument("--output", type=str, default="")
 parser.add_argument("--hold", type=float, default=1.0)
-AppLauncher.add_app_launcher_args(parser)
+add_app_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
@@ -62,11 +62,12 @@ args, _ = parser.parse_known_args()
 args.interactive = args.interactive or args.ui
 args.enable_cameras = True
 args.headless = args.headless or not args.interactive
-app = AppLauncher(args).app
+app = launch(args, view=args.video or args.interactive or args.ui)
 
 import cv2  # noqa: E402
 
 import constants as C  # noqa: E402
+import isaac_app  # noqa: E402
 from language_pipeline import LOCATE, PHASE_NAMES, LanguageInsertController  # noqa: E402
 from multi_pipe_env import MultiPipeEnv, MultiPipeEnvCfg  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
@@ -89,8 +90,8 @@ def make_env(n, render):
     cfg.p_position = args.p_position
     cfg.sim.device = args.device
     if render or args.interactive:
-        cfg.viewer.resolution, cfg.viewer.lookat, cfg.viewer.eye = VIEW
-    return MultiPipeEnv(cfg, render_mode="rgb_array" if render else None)
+        isaac_app.set_viewer(cfg, resolution=VIEW[0], lookat=VIEW[1], eye=VIEW[2])
+    return MultiPipeEnv(cfg)
 
 
 def make_ground_fn():
@@ -146,7 +147,7 @@ def tip_and_info_panel(env, ctrl, i, h, result):
              ("VLM time", f"{ctrl.vlm_seconds[i]:.1f} s" if ctrl.answer[i] else "-"),
              ("grounding", {"right": "correct pipe", "wrong": "WRONG pipe", "none": "no box", "": "-"}[ctrl.grounding[i]]),
              ("insertion", "image-based student"),
-             ("elevator", f"{float(env.robot.data.joint_pos[i, env._jelev[0]]) * 1000:+.0f} mm")]
+             ("elevator", f"{float(env.robot.data.joint_pos.torch[i, env._jelev[0]]) * 1000:+.0f} mm")]
     y = 26 if compact else 36
     for k, v in lines:
         if compact:
@@ -166,7 +167,7 @@ def tip_and_info_panel(env, ctrl, i, h, result):
 
 
 def frame(env, ctrl, i, ep, n_eps, step, result):
-    scene = cv2.cvtColor(np.ascontiguousarray(env.render()), cv2.COLOR_RGB2BGR)
+    scene = cv2.cvtColor(isaac_app.grab(env), cv2.COLOR_RGB2BGR)
     scene = cv2.resize(scene, VIEW[0])
     overlay = scene.copy()
     cv2.rectangle(overlay, (10, 10), (650, 84), (18, 20, 26), -1)
@@ -296,7 +297,7 @@ def main():
     writer, out = None, ""
     if args.video:
         for _ in range(3):
-            env.render()
+            isaac_app.grab(env)
         out = args.output or os.path.join(TASK_DIR, "videos", f"language_{args.view}.mp4")
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
         writer = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), 25.0, (VIEW[0][0] + PANEL_W, VIEW[0][1]))

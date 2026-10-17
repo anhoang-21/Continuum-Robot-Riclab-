@@ -25,21 +25,21 @@ import tensordict  # noqa: F401  (Windows: load DLLs before Kit)
 TASK_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TASK_DIR)
 
-from isaaclab.app import AppLauncher  # noqa: E402
+from isaac_app import add_app_args, launch  # noqa: E402
 
 parser = argparse.ArgumentParser(description="Overview images with instructions and ground truth")
 parser.add_argument("--scenes", type=int, default=300)
 parser.add_argument("--num_envs", "--num-envs", dest="num_envs", type=int, default=16)
 parser.add_argument("--seed", type=int, default=500)
 parser.add_argument("--out", default=os.path.join(TASK_DIR, "data", "grounding"))
-AppLauncher.add_app_launcher_args(parser)
+add_app_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
 args.enable_cameras = True
 args.headless = True
-app = AppLauncher(args).app
+app = launch(args)
 
 from PIL import Image  # noqa: E402
 

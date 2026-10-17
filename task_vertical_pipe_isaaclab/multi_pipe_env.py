@@ -25,12 +25,12 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObject, RigidObjectCfg
 from isaaclab.envs import DirectRLEnv
-from isaaclab.sensors import TiledCamera, TiledCameraCfg
+from isaaclab.sensors import Camera, CameraCfg
 from isaaclab.utils import configclass
 
 import constants as C
 from multi_pipe import PALETTE, TRAIN_TUBE, MultiPipeSampler, OverviewCamera
-from vertical_pipe_env import CONTACT_OFFSET, PIPE_USD, REST_OFFSET
+from vertical_pipe_env import PIPE_USD, _collision_props, _kinematic_props
 from vision_env import VisionPipeEnv, VisionPipeEnvCfg, VisionPipeSceneCfg
 
 _OV = OverviewCamera()
@@ -42,8 +42,8 @@ def _distractor(name):
         prim_path="{ENV_REGEX_NS}/" + name,
         spawn=sim_utils.UsdFileCfg(
             usd_path=PIPE_USD["random"],
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True, disable_gravity=True),
-            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=CONTACT_OFFSET, rest_offset=REST_OFFSET),
+            rigid_props=_kinematic_props(),
+            collision_props=_collision_props(),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(pos=(3.0, 3.0, 0.0)),
     )
@@ -53,9 +53,9 @@ def _distractor(name):
 class MultiPipeSceneCfg(VisionPipeSceneCfg):
     pipe_b: RigidObjectCfg = _distractor("PipeB")
     pipe_c: RigidObjectCfg = _distractor("PipeC")
-    overview_cam: TiledCameraCfg = TiledCameraCfg(
+    overview_cam: CameraCfg = CameraCfg(
         prim_path="{ENV_REGEX_NS}/OverviewCam",
-        offset=TiledCameraCfg.OffsetCfg(pos=tuple(float(v) for v in _OV.EYE), rot=_OV.quat(), convention="ros"),
+        offset=CameraCfg.OffsetCfg(pos=tuple(float(v) for v in _OV.EYE), rot=_OV.quat_xyzw(), convention="ros"),
         data_types=["rgb", "distance_to_image_plane"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=_OV_FOCAL,
@@ -101,14 +101,14 @@ class MultiPipeEnv(VisionPipeEnv):
         super()._setup_scene()
         self.pipe_b: RigidObject = self.scene["pipe_b"]
         self.pipe_c: RigidObject = self.scene["pipe_c"]
-        self.overview_cam: TiledCamera | None = self.scene["overview_cam"] if self.cfg.overview else None
+        self.overview_cam: Camera | None = self.scene["overview_cam"] if self.cfg.overview else None
 
     # ------------------------------------------------------------------
     def _reset_idx(self, env_ids):
         if not getattr(self, "_multi_ready", False):
             return super()._reset_idx(env_ids)
         if env_ids is None:
-            env_ids = self.robot._ALL_INDICES
+            env_ids = self._all_ids
         DirectRLEnv._reset_idx(self, env_ids)
         ids = env_ids.tolist() if isinstance(env_ids, torch.Tensor) else list(env_ids)
         k = len(ids)
@@ -138,8 +138,8 @@ class MultiPipeEnv(VisionPipeEnv):
                 pose[j, :2] = torch.as_tensor(sc.pipe_xy[other], dtype=torch.float32, device=self.device)
                 pose[j, 2] = float(sc.z_top[other])
             pose[:, :3] += origins
-            pose[:, 3] = 1.0
-            obj.write_root_pose_to_sim(pose, env_ids=idx)
+            pose[:, 6] = 1.0                               # identity rotation, (x, y, z, w)
+            obj.write_root_pose_to_sim_index(root_pose=pose, env_ids=idx.to(torch.int32))
 
     def _paint(self, ids, rngs):
         """Tube (and lower collar) colours of the three pipes, per env, on the USD stage."""
@@ -180,6 +180,6 @@ class MultiPipeEnv(VisionPipeEnv):
     def overview_camera(self):
         """rgb (N, H, W, 3) [0, 1], depth (N, H, W) m, K (3, 3), cam_pos (3,) and cam_rot (3, 3) in the env frame."""
         out = self.overview_cam.data.output
-        rgb = out["rgb"][..., :3].float() / 255.0
-        depth = torch.nan_to_num(out["distance_to_image_plane"][..., 0].float(), nan=0.0, posinf=0.0, neginf=0.0)
+        rgb = out["rgb"].torch[..., :3].float() / 255.0
+        depth = torch.nan_to_num(out["distance_to_image_plane"].torch[..., 0].float(), nan=0.0, posinf=0.0, neginf=0.0)
         return rgb, depth, self.overview.K, self.overview.EYE, self.overview.rot

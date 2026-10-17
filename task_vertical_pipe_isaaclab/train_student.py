@@ -33,7 +33,7 @@ import rsl_rl  # noqa: F401
 TASK_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TASK_DIR)
 
-from isaaclab.app import AppLauncher  # noqa: E402
+from isaac_app import add_app_args, launch  # noqa: E402
 
 parser = argparse.ArgumentParser(description="DAgger: tip-camera student from the privileged PPO teacher")
 parser.add_argument("--teacher", type=str, default=os.path.join("models", "mujoco_ppo_vpipe_wide", "model.pt"))
@@ -57,14 +57,14 @@ parser.add_argument("--multi", action="store_true",
 parser.add_argument("--train-tube-prob", type=float, default=0.25,
                     help="--multi: chance that the target keeps the light-blue tube of the single-pipe task")
 parser.add_argument("--init", type=str, default="", help="start from this student checkpoint")
-AppLauncher.add_app_launcher_args(parser)
+add_app_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
 args.enable_cameras = True
 args.headless = True
-app = AppLauncher(args).app
+app = launch(args)
 
 from tensordict import TensorDict  # noqa: E402
 from torch.utils.tensorboard import SummaryWriter  # noqa: E402

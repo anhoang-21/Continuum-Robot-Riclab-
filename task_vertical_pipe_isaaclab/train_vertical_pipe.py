@@ -33,7 +33,7 @@ import rsl_rl  # noqa: F401
 TASK_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TASK_DIR)
 
-from isaaclab.app import AppLauncher  # noqa: E402
+from isaac_app import add_app_args, launch  # noqa: E402
 
 parser = argparse.ArgumentParser(description="PPO (rsl_rl): continuum robot moves down through a vertical pipe")
 parser.add_argument("--timesteps", type=int, default=3_000_000, help="Total training steps (default 3M)")
@@ -57,13 +57,13 @@ parser.add_argument("--checkpoint-freq", type=int, default=200_000, help="Checkp
 parser.add_argument("--stop-at", type=int, default=0,
                     help="Stop after this many steps; the learning-rate schedule still spans --timesteps (0 = off)")
 parser.add_argument("--viewer", action="store_true", help="Open the Isaac Sim window (training runs headless by default)")
-AppLauncher.add_app_launcher_args(parser)
+add_app_args(parser)
 parser.set_defaults(device="cuda:0")      # PhysX GPU pipeline (the CPU pipeline is not supported, see README)
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
 args.headless = not args.viewer
-app = AppLauncher(args).app
+app = launch(args, view=args.viewer)
 
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 

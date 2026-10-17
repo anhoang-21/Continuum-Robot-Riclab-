@@ -1,7 +1,9 @@
 # Vertical-pipe task in Isaac Lab (port of the MuJoCo version)
 
 Port of `D:\mujoco\Continuum_MuJoCo\task_vertical_pipe` (continuum robot bends into an S-shape
-and feeds down through a vertical pipe) to Isaac Sim 5.1 / Isaac Lab 2.3.2, trained with rsl_rl.
+and feeds down through a vertical pipe) to Isaac Sim 6.2 / Isaac Lab 3.0 (Python 3.12, venv
+`D:\Isaacsim\env_isaacsim62`), trained with rsl_rl (rsl-rl-lib 5.5.1). The port was made on Isaac Sim 5.1 /
+Isaac Lab 2.3.2; the results below were measured there (see [Isaac Sim 6.2](#isaac-sim-62--isaac-lab-30)).
 Observation, action, reward, termination, reset / randomization, `dt` and `frame_skip` are the
 ones of the MuJoCo env; the PPO update and hyperparameters are the ones of its SB3 trainer.
 
@@ -19,6 +21,7 @@ Videos (policy trained in MuJoCo, run in Isaac Sim): [12 random pipes, two-panel
 | `reset_logic.py` | start-state sampling (`reset`, `_place_pipe`, `_assisted_start`), same numpy draws |
 | `mdp.py` | action -> commands, measurements, observation (33), reward, termination (torch) |
 | `vertical_pipe_env.py` | Isaac Lab `DirectRLEnv` + scene / sim configuration |
+| `isaac_app.py` | Kit start-up (`--headless`, `--enable_cameras`, Kit visualizer) and viewer camera / frame capture |
 | `convert_mjcf_to_usd.py` | MJCF -> USD (robot) and the pipe USDs |
 | `ppo_sb3.py`, `agent_cfg.py`, `pipe_runner.py` | rsl_rl PPO with the SB3 update rule, config, runner with eval / checkpoints |
 | `train_vertical_pipe.py`, `play_vertical_pipe.py` | training / viewer, statistics, video |
@@ -76,7 +79,9 @@ tensorboard --logdir logs
 ```
 
 All scripts append `--/app/vulkan=false` (DirectX 12, as the other Isaac scripts on this machine)
-and import torch / tensordict / rsl_rl before Kit starts (Windows DLL order).
+and import torch / tensordict / rsl_rl before Kit starts (Windows DLL order). Isaac Lab 3.0 opens a
+window only with the Kit visualizer (`--viz kit`); the scripts request it themselves when they show the
+scene (window, or offscreen frames for `--video`), see `isaac_app.py`.
 
 ## What is the same as MuJoCo
 
@@ -120,9 +125,13 @@ Checked (`tests/`):
 
 `convert_mjcf_to_usd.py` rebuilds the model the MuJoCo env simulates (the env edits the MJCF in code:
 it removes the mesh colliders, adds one collision cylinder per segment, 31 position servos, armature
-and damping), converts it with the Isaac Sim MJCF importer (`isaaclab.sim.converters.MjcfConverter`)
-into `continuum_physics.usd` (colliders only, for training) and `continuum_visual.usd` (+ CAD meshes),
-and writes `pipe_rig.usd` / `pipe_random.usd` (24 box staves on a kinematic body, bore 100 / 70 mm).
+and damping), converts it with the Isaac Sim MJCF importer (`isaaclab.sim.converters.MjcfConverter`, PhysX physics
+variant) into `continuum_physics/.../continuum_physics.usda` (colliders only, for training) and
+`continuum_visual/.../continuum_visual.usda` (+ CAD meshes), and writes `pipe_rig.usd` / `pipe_random.usd`
+(24 box staves on a kinematic body, bore 100 / 70 mm). The Isaac Sim 6.2 importer nests the links like
+the MJCF body tree (`base_link/Elevator_Link/Dummy_Link1/Seg1/Dummy_Link2/Seg2/...`); the prim path of
+every body and the USD file are written to `assets/generated/usd/robot_layout.json`, which the env reads
+(contact view, tip camera).
 
 What the importer does not carry over, and the replacement:
 
@@ -133,9 +142,9 @@ What the importer does not carry over, and the replacement:
 | position servo `kv` (dropped by the importer) and joint damping | `ImplicitActuatorCfg`: stiffness kp, damping kv + 0.5, effort limit = `actuatorfrcrange` (20 N m), armature 0.01 |
 | contact parameters: `solref`, `solimp`, `margin`, `condim`, torsional / rolling friction | PhysX rigid contacts: friction 0.3 static = dynamic (only sliding friction is used with condim 3), restitution 0, contact offset 2 mm, rest offset 0. MuJoCo's soft contacts let the tip sink 0.5-1.3 mm into the rim before `rim_hit`; PhysX does not penetrate, so a point outside the rim-radius counts as a hit up to 1 mm of separation (`rim_touch_tolerance`; 1 mm gives the best outcome agreement: 0.1 mm 59/72, 0.5 mm 64/72, 1 mm 67/72, 2 mm 65/72) and an inner-wall point counts as contact up to 0.1 mm (`contact_touch_tolerance`) |
 | `contype` / `conaffinity` (segments never collide with each other) | importer: filtered pairs; `enabled_self_collisions=False` |
-| mocap pipe body | kinematic rigid body, moved at reset (`write_root_pose_to_sim`) |
-| world-body frame geoms + slide joint to the world | jointless `base_link` root (fixed joint), the elevator is a prismatic articulation joint; the importer anchors the fixed joint at the world origin, the env moves each env's anchor to its env origin |
-| extra `worldBody` articulation root, visual copies of the collision cylinders, instanced colliders | removed / hidden / de-instanced by the converter |
+| mocap pipe body | kinematic rigid body, moved at reset (`write_root_pose_to_sim_index`) |
+| world-body frame geoms + slide joint to the world | jointless `base_link` root (fixed joint), the elevator is a prismatic articulation joint; the importer anchors the fixed joint for a robot at the world origin, the env sets each env's anchor to where that env's robot is (`anchor_world_joints`) |
+| extra articulation roots, extra / missing world joints, visual copies of the collision cylinders, instanced colliders | removed / added / hidden / de-instanced by the converter |
 | contact list `data.contact` | PhysX contact points of every segment with the pipe of its env (tensor contact view). MuJoCo gives 1-2 contacts per segment / stave pair, PhysX a patch of up to ~30 points: the wall-contact count uses one contact per (segment, stave) pair, the stave found from the point's angle around the pipe axis. PhysX leaves the contact buffers untouched in a step without any contact in the scene, so stale points of an earlier contact come back (with few envs this gave false rim hits right after resets); a point is only used if it lies on the current collider of its segment (`contact_point_tolerance`, 1.5 mm beyond its separation) |
 | `mj_forward` + `ncon == 0` test of a start pose | `kinematics.pipe_overlap` (sampled cylinder / box overlap); gives the same accept / reject as MuJoCo on all 1800 test resets |
 | `mjWARN_BADQACC` ("unstable") | non-finite joint state or joint speed > 1000 rad/s (m/s) |
@@ -432,7 +441,7 @@ pipeline.
 
 - PhysX GPU pipeline only: on the CPU pipeline of Isaac Sim 5.1 the kinematic pipe is moved back to
   its USD pose every step and the tensor contact view returns no contacts (`VerticalPipeEnv` refuses
-  `sim.device="cpu"`).
+  `sim.device="cpu"`; not re-checked on 6.2).
 - Speed on this laptop (RTX 5070 Laptop, Windows): ~220 env-steps/s with 16 envs (3M steps ~ 4 h),
   ~920 env-steps/s with 72 envs; the MuJoCo trainer runs ~2300 steps/s. With 16 small articulations
   the GPU pipeline is dominated by its fixed cost per physics step; more envs use the GPU far better
@@ -441,3 +450,28 @@ pipeline.
 - `env.auto_reset = False` keeps finished envs in their final pose until `env.reset_envs(ids)`
   (used by the viewer / video).
 - Outputs (`models/`, `logs/`, `videos/`, `assets/generated/`, `tests/data/`) are not in git.
+
+## Isaac Sim 6.2 / Isaac Lab 3.0
+
+What changed for the port (the [Isaac Lab 3.0 migration guide](https://isaac-sim.github.io/IsaacLab/develop/source/migration/migrating_to_isaaclab_3-0.html)):
+
+| Isaac Lab 2.3 (Isaac Sim 5.1) | here (Isaac Lab 3.0, Isaac Sim 6.2) |
+|---|---|
+| quaternions `(w, x, y, z)` | `(x, y, z, w)`: init states, camera offsets, root poses (`pose[:, 6] = 1`) |
+| `robot.data.joint_pos` etc. are tensors | `ProxyArray`: `.torch` |
+| `write_root_pose_to_sim(pose, env_ids)`, `write_joint_state_to_sim`, `set_joint_position_target` | `write_*_to_sim_index(..., env_ids=int32)`, `robot.actuators.target_command.set_position_index` |
+| `sim_utils.RigidBodyPropertiesCfg` / `ArticulationRootPropertiesCfg` / `CollisionPropertiesCfg` | schema fragments `PhysxRigidBodyCfg`, `UsdPhysicsRigidBodyCfg`, `PhysxArticulationCfg`, `PhysxCollisionCfg` |
+| `SimulationCfg(physx=PhysxCfg(...))` | `SimulationCfg(physics=isaaclab_physx.physics.PhysxCfg(...))` |
+| `effort_limit_sim` / `velocity_limit_sim` | `joint_effort_limit` / `joint_velocity_limit` |
+| `TiledCamera(Cfg)`, `data.output[...]` tensors | `Camera(Cfg)`, `data.output[...].torch` |
+| `isaacsim.core.simulation_manager.SimulationManager` | `isaaclab_physx.physics.PhysxManager`; the tensor API returns warp arrays |
+| `MultiUsdFileCfg(random_choice=False)`: env i gets `usd_path[i % n]` | clone plans; default: contiguous blocks -> `CloneCfg(clone_strategy=cyclic_clone_strategy)` |
+| `ViewerCfg`, `env.viewport_camera_controller`, `env.render()` -> RGB | `KitVisualizerCfg` (`sim.default_visualizer_cfg`), `isaac_app.look_at / follow_env / grab` |
+| `--headless`, `--enable_cameras` launcher options, window by default | not in the launcher any more: added by `isaac_app.add_app_args`; window = Kit visualizer (`--viz kit`) |
+| MJCF importer: flat links, `joints/rootJoint_base_link` | nested links (`robot_layout.json`), world joint found by type, layered `.usda` with physics variants |
+
+Not checked on Isaac Sim 6.2 yet (no Isaac Sim on the machine that made the change): run
+`convert_mjcf_to_usd.py` and `tests\check_isaac_env.py` first; the numbers in this README (MuJoCo
+agreement, success rates, speed) are from Isaac Sim 5.1 / Isaac Lab 2.3.2. Checkpoints from the old
+venv load only if its rsl_rl `MLPModel` had the same parameter names as rsl-rl-lib 5.5.1; otherwise
+retrain, or convert the MuJoCo SB3 model again with `import_sb3_policy.py`.

@@ -10,9 +10,13 @@ convert_mjcf_to_usd.py - MJCF -> USD for the vertical-pipe task (step 3 of the p
    added and armature / damping are set on every DOF. The same edits are written into
    assets/generated/mjcf/continuum_{physics,visual}.xml (a jointless "base_link" body
    is added as the fixed articulation root, which does not change the MuJoCo model).
-2. Converts both files with the Isaac Sim MJCF importer (isaaclab.sim.converters.MjcfConverter):
-     continuum_physics.usd  - colliders only (training, like the MuJoCo env with visual=False)
-     continuum_visual.usd   - + the CAD meshes as visuals (play / video)
+2. Converts both files with the Isaac Sim 6.2 MJCF importer (isaaclab.sim.converters.MjcfConverter,
+   mujoco-usd-converter inside), PhysX physics variant:
+     continuum_physics/continuum_physics/continuum_physics.usda  - colliders only (training, like the
+                                                                    MuJoCo env with visual=False)
+     continuum_visual/continuum_visual/continuum_visual.usda     - + the CAD meshes as visuals (play / video)
+   The importer nests the links like the MJCF body tree (base_link/Elevator_Link/Dummy_Link1/Seg1/...);
+   the prim path of every body is written to robot_layout.json for the env.
 3. Checks the USD against the MJCF (bodies, inertia, joints, limits, colliders) and prints
    what the importer does not carry over; the env sets those in Isaac Lab (see README).
 4. Writes the pipe assets pipe_rig.usd / pipe_random.usd (24 box staves on one kinematic
@@ -21,7 +25,9 @@ convert_mjcf_to_usd.py - MJCF -> USD for the vertical-pipe task (step 3 of the p
 """
 
 import argparse
+import json
 import os
+import shutil
 import sys
 
 sys.stdout.reconfigure(line_buffering=True)  # Kit exits with os._exit: keep prints when stdout is a file
@@ -124,28 +130,62 @@ def build_import_mjcf(src, dst, visual, mesh_dir):
 # ---------------------------------------------------------------------------
 def postprocess_robot_usd(path, visual):
     """
-    - the importer adds an empty /worldBody prim carrying a second ArticulationRootAPI; Isaac Lab
-      needs exactly one articulation root -> deactivate it (the fixed joint to the world is kept)
-    - visuals / collisions are instanceable; instance proxies cannot be edited, so the collider
+    - Isaac Lab needs exactly one articulation root: an extra ArticulationRootAPI on a prim without
+      rigid body (e.g. an empty /worldBody of older importers) is removed / deactivated
+    - base_link is welded to the world (jointless body in the MJCF): exactly one fixed joint from the
+      world to it is kept (the importer writes one; it is created if missing)
+    - visuals / collisions may be instanceable; instance proxies cannot be edited, so the collider
       properties set by the env (contact / rest offset) would be ignored -> de-instance them
-    - the importer also makes a visual copy of every collision cylinder (MuJoCo hides them in
-      geom group 3); in the CAD-mesh USD they are hidden
+    - a visual copy of a collision cylinder (MuJoCo hides them in geom group 3) is hidden
+    Returns {body name: prim path below the default prim} of the rigid bodies.
     """
-    from pxr import Usd, UsdGeom
+    from pxr import Usd, UsdGeom, UsdPhysics
 
     stage = Usd.Stage.Open(path)
     root = stage.GetDefaultPrim()
-    world_body = stage.GetPrimAtPath(root.GetPath().AppendChild("worldBody"))
-    if world_body.IsValid():
-        world_body.SetActive(False)
-    for prim in list(stage.Traverse()):
-        if prim.IsInstance():
+    for _ in range(8):                          # instances can be nested
+        instances = [p for p in Usd.PrimRange(root) if p.IsInstance()]
+        if not instances:
+            break
+        for prim in instances:
             prim.SetInstanceable(False)
+
+    bodies, roots = {}, []
+    for prim in Usd.PrimRange(root):
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            bodies[prim.GetName()] = prim.GetPath().MakeRelativePath(root.GetPath()).pathString
+        if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+            roots.append(prim)
+    if "base_link" not in bodies or any(f"Seg{i}" not in bodies for i in range(1, 16)):
+        raise RuntimeError(f"{path}: rigid bodies base_link / Seg1..Seg15 not found, got {sorted(bodies)}")
+    for prim in roots:
+        if len(roots) > 1 and not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            if prim == root:
+                prim.RemoveAPI(UsdPhysics.ArticulationRootAPI)
+            else:
+                prim.SetActive(False)
+
+    base = root.GetPath().AppendPath(bodies["base_link"])
+    world_joints = []
+    for prim in Usd.PrimRange(root):
+        if prim.IsA(UsdPhysics.FixedJoint):
+            joint = UsdPhysics.FixedJoint(prim)
+            ends = [joint.GetBody0Rel().GetTargets(), joint.GetBody1Rel().GetTargets()]
+            linked = [bool(t) and stage.GetPrimAtPath(t[0]).HasAPI(UsdPhysics.RigidBodyAPI) for t in ends]
+            if linked.count(True) == 1 and base in [t[0] for t, ok in zip(ends, linked) if ok]:
+                world_joints.append(prim)
+    for prim in world_joints[1:]:
+        prim.SetActive(False)
+    if not world_joints:
+        joint = UsdPhysics.FixedJoint.Define(stage, base.AppendChild("RootFixedJoint"))
+        joint.CreateBody1Rel().SetTargets([base])       # body0 = world; the env sets the anchor per env
     if visual:
-        for prim in stage.Traverse():
-            if prim.GetName().endswith("_col") and "/visuals/" in str(prim.GetPath()):
+        for prim in Usd.PrimRange(root):
+            if prim.GetName().endswith("_col") and prim.IsA(UsdGeom.Gprim) \
+                    and not prim.HasAPI(UsdPhysics.CollisionAPI):
                 UsdGeom.Imageable(prim).MakeInvisible()
     stage.GetRootLayer().Save()
+    return bodies
 
 
 # ---------------------------------------------------------------------------
@@ -318,8 +358,8 @@ def main():
                         help="folder with the .obj meshes referenced by the MJCF (visual USD only)")
     parser.add_argument("--no-visual", action="store_true", help="only build the collider-only USD")
     parser.add_argument("--pipes-only", action="store_true", help="only rewrite pipe_rig.usd / pipe_random.usd")
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    from isaac_app import add_app_args, launch
+    add_app_args(parser)
     if not any(a.startswith("--/app/vulkan") for a in sys.argv):
         sys.argv.append("--/app/vulkan=false")
     args, _ = parser.parse_known_args()
@@ -336,20 +376,37 @@ def main():
         xmls[name] = build_import_mjcf(args.mjcf, os.path.join(GEN_MJCF_DIR, f"{name}.xml"), visual, args.mesh_dir)
         print(f"[MJCF] {xmls[name]}")
 
-    app = AppLauncher(args).app
-    import omni.kit.app
-    omni.kit.app.get_app().get_extension_manager().set_extension_enabled_immediate("isaacsim.asset.importer.mjcf", True)
+    app = launch(args)
     from isaaclab.sim.converters import MjcfConverter, MjcfConverterCfg
 
+    layout_path = os.path.join(GEN_USD_DIR, "robot_layout.json")
+    try:
+        with open(layout_path, encoding="utf-8") as f:
+            layout = json.load(f)
+    except (OSError, ValueError):
+        layout = {}
     report = []
     for name, xml in xmls.items():
-        cfg = MjcfConverterCfg(asset_path=xml, usd_dir=os.path.join(GEN_USD_DIR, name), usd_file_name=f"{name}.usd",
-                               fix_base=True, import_sites=False, force_usd_conversion=True, make_instanceable=False,
-                               self_collision=False)
+        # a fresh output folder: the importer writes numbered copies next to an existing conversion
+        usd_dir = os.path.join(GEN_USD_DIR, name)
+        shutil.rmtree(usd_dir, ignore_errors=True)
+        # fix_base=False: base_link is a jointless body of the worldbody, the importer welds it to the world
+        # itself (postprocess_robot_usd checks that there is exactly one such joint)
+        cfg = MjcfConverterCfg(asset_path=xml, usd_dir=usd_dir, fix_base=False, self_collision=False,
+                               merge_mesh=False, collision_from_visuals=False, import_physics_scene=False,
+                               force_usd_conversion=True,
+                               physics_variant=MjcfConverterCfg.PhysicsVariant.PHYSX)
         usd_path = MjcfConverter(cfg).usd_path
         print(f"[USD] {usd_path}")
-        postprocess_robot_usd(usd_path, variants[name])
+        bodies = postprocess_robot_usd(usd_path, variants[name])
+        layout[name.split("_", 1)[1]] = {"usd": os.path.relpath(usd_path, GEN_USD_DIR).replace(os.sep, "/"),
+                                         "bodies": bodies}
         inspect_robot_usd(usd_path, report)
+        report.append(f"  body prim paths: Seg15 -> {bodies['Seg15']}")
+    if xmls:
+        with open(layout_path, "w", encoding="utf-8") as f:
+            json.dump(layout, f, indent=2)
+        print(f"[layout] {layout_path}")
 
     for mode in C.PIPE_MODES:
         path = write_pipe_usd(os.path.join(GEN_USD_DIR, f"pipe_{mode}.usd"), mode)
