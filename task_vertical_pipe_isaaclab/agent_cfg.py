@@ -26,11 +26,12 @@ BATCH_SIZE = 1024
 
 
 def make_agent_cfg(n_envs: int, total_timesteps: int, gamma: float = 0.99, seed: int = 0,
-                   lr_initial: float = 3e-4, lr_final: float = 1e-5) -> dict:
-    rollout = N_STEPS * n_envs
+                   lr_initial: float = 3e-4, lr_final: float = 1e-5, n_steps: int = N_STEPS) -> dict:
+    """n_steps: rollout length per env (SB3 n_steps). Many envs + short rollouts keep the samples per update."""
+    rollout = n_steps * n_envs
     return {
         "seed": seed,
-        "num_steps_per_env": N_STEPS,
+        "num_steps_per_env": n_steps,
         "save_interval": 10 ** 9,                # checkpoints are written by PipeRunner (every 200k steps)
         "check_for_nan": True,
         "logger": "tensorboard",
@@ -69,6 +70,6 @@ def make_agent_cfg(n_envs: int, total_timesteps: int, gamma: float = 0.99, seed:
     }
 
 
-def num_iterations(total_timesteps: int, n_envs: int) -> int:
+def num_iterations(total_timesteps: int, n_envs: int, n_steps: int = N_STEPS) -> int:
     """SB3 keeps collecting rollouts while num_timesteps < total_timesteps."""
-    return math.ceil(total_timesteps / (N_STEPS * n_envs))
+    return math.ceil(total_timesteps / (n_steps * n_envs))

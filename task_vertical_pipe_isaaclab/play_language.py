@@ -54,14 +54,18 @@ parser.add_argument("--view", choices=["close", "wide"], default="close",
                     help="video scene view: close = near the pipes (as play_vision.py --view close), wide = whole rig")
 parser.add_argument("--output", type=str, default="")
 parser.add_argument("--hold", type=float, default=1.0)
+parser.add_argument("--cable", action="store_true",
+                    help="cable-driven robot (cable_stages.CableMultiPipeEnv); default student models/student_multi_cable/final.pt")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
+if args.cable and args.student == parser.get_default("student"):
+    args.student = os.path.join("models", "student_multi_cable", "final.pt")
 args.interactive = args.interactive or args.ui
 args.enable_cameras = True
-args.headless = args.headless or not args.interactive
+args.headless = getattr(args, "headless", False) or not args.interactive
 app = AppLauncher(args).app
 
 import cv2  # noqa: E402
@@ -83,14 +87,23 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
 def make_env(n, render):
-    cfg = MultiPipeEnvCfg()
+    if args.cable:
+        from cable_stages import CableMultiPipeEnv, CableMultiPipeEnvCfg
+
+        cfg = CableMultiPipeEnvCfg()
+        cfg.show_cables = cfg.show_actuators = render or args.interactive   # cables + lead-screw drive drawn
+        cfg.cable_draw_radius = 0.0014
+    else:
+        cfg = MultiPipeEnvCfg()
     cfg.scene.num_envs = n
     cfg.seed = args.seed
     cfg.p_position = args.p_position
     cfg.sim.device = args.device
     if render or args.interactive:
         cfg.viewer.resolution, cfg.viewer.lookat, cfg.viewer.eye = VIEW
-    return MultiPipeEnv(cfg, render_mode="rgb_array" if render else None)
+        if args.cable and args.interactive:               # whole drive in view: motors + screws, arm, pipes
+            cfg.viewer.lookat, cfg.viewer.eye = (0.10, 0.20, 1.05), (1.10, 1.25, 1.40)
+    return (CableMultiPipeEnv if args.cable else MultiPipeEnv)(cfg, render_mode="rgb_array" if render else None)
 
 
 def make_ground_fn():

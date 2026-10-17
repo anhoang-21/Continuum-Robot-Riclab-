@@ -34,7 +34,10 @@ parser = argparse.ArgumentParser(description="Stage 5 demo video with the comman
 parser.add_argument("--student", default=os.path.join("models", "student_multi", "final.pt"))
 parser.add_argument("--episodes", type=int, default=4)
 parser.add_argument("--seed", type=int, default=7300)
-parser.add_argument("--output", default=os.path.join(TASK_DIR, "videos", "ui_demo.mp4"))
+parser.add_argument("--output", default="")
+parser.add_argument("--cable", action="store_true",
+                    help="cable-driven robot (cable_stages.CableMultiPipeEnv): cables + lead-screw modules drawn, "
+                         "the actuator diagram in the bottom row; default student models/student_multi_cable/final.pt")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
@@ -42,6 +45,9 @@ if not any(a.startswith("--/app/vulkan") for a in sys.argv):
 args, _ = parser.parse_known_args()
 args.enable_cameras = True
 args.headless = True
+if args.cable and args.student == parser.get_default("student"):
+    args.student = os.path.join("models", "student_multi_cable", "final.pt")
+args.output = args.output or os.path.join(TASK_DIR, "videos", "ui_demo_cable.mp4" if args.cable else "ui_demo.mp4")
 app = AppLauncher(args).app
 
 import re  # noqa: E402
@@ -62,7 +68,8 @@ from vlm import QwenGrounder  # noqa: E402
 W, H, FPS = 1920, 1080, 25
 SCENE_W, UI_W = 1280, 640
 EYE, TARGET = (0.62, -0.42, 0.86), (0.09, 0.21, 0.58)   # the viewer camera of the Isaac window
-SCENE_H = 720                                             # 16:9 like the Isaac viewport; cameras + pipeline below
+CABLE_EYE, CABLE_TARGET = (2.05, 0.10, 1.52), (0.10, 0.18, 1.06)   # --cable: whole frame, drive on top
+SCENE_H = 720                                            # 16:9 like the Isaac viewport; cameras + pipeline below
 FONTS = "C:/Windows/Fonts/"
 INK, GREY, LINE, ACCENT, GREEN = (29, 36, 48), (107, 118, 134), (227, 231, 238), (227, 52, 47), (31, 157, 85)
 
@@ -172,8 +179,8 @@ STEPS = (("LOCATE", "1  Overview camera + Qwen3-VL-2B pick the pipe"),
          ("INSERT", "3  Image-based policy threads the pipe"))
 
 
-def bottom_row(ov, box, chosen_ring, tip, phase):
-    """Overview camera with the VLM box | tip camera | pipeline, 1280 x 360."""
+def bottom_row(ov, box, chosen_ring, tip, phase, actuators=None):
+    """Overview camera with the VLM box | tip camera | pipeline (or the actuator diagram), 1280 x 360."""
     row = Image.new("RGB", (SCENE_W, H - SCENE_H), (14, 20, 32))
     d = ImageDraw.Draw(row)
     o = Image.fromarray(ov).resize((480, 360), Image.LANCZOS)
@@ -192,6 +199,13 @@ def bottom_row(ov, box, chosen_ring, tip, phase):
     row.paste(t, (490, 0))
     d.rectangle([490, 0, 640, 30], fill=(14, 20, 32))
     d.text((498, 5), "TIP CAMERA (Seg15)", font=F["cap"], fill=(0, 230, 255))
+    if actuators is not None:                            # cable-driven robot: the 6 lead-screw modules
+        a = Image.fromarray(cv2.cvtColor(actuators, cv2.COLOR_BGR2RGB))
+        row.paste(a, (SCENE_W - a.width, 0))
+        d.rectangle([SCENE_W - a.width, 0, SCENE_W, 26], fill=(14, 20, 32))
+        d.text((SCENE_W - a.width + 8, 4), f"MOTORS -> LEAD SCREWS -> CABLES   ·   phase {phase or '-'}",
+               font=F["cap"], fill=(0, 230, 255))
+        return row
     x, y = 872, 26
     d.text((x, y), "PIPELINE", font=F["cap"], fill=(160, 172, 190))
     y += 34
@@ -243,12 +257,22 @@ def instruction_for(sc, k):
 
 def main():
     grounder = QwenGrounder("2b", device="cpu")
-    cfg = MultiPipeEnvCfg()
+    if args.cable:
+        from cable_stages import CableMultiPipeEnv, CableMultiPipeEnvCfg
+
+        cfg = CableMultiPipeEnvCfg()
+        cfg.show_cables = True
+        cfg.show_actuators = True
+        cfg.cable_draw_radius = 0.0012
+    else:
+        cfg = MultiPipeEnvCfg()
     cfg.scene.num_envs = 1
     cfg.seed = args.seed
     cfg.sim.device = args.device
     cfg.viewer.resolution, cfg.viewer.eye, cfg.viewer.lookat = (SCENE_W, SCENE_H), EYE, TARGET
-    env = MultiPipeEnv(cfg, render_mode="rgb_array")
+    if args.cable:
+        cfg.viewer.eye, cfg.viewer.lookat = CABLE_EYE, CABLE_TARGET
+    env = (CableMultiPipeEnv if args.cable else MultiPipeEnv)(cfg, render_mode="rgb_array")
     student = load_student(os.path.join(TASK_DIR, args.student), device=env.device)
     ctrl = LanguageInsertController(env, student, grounder.ground, follow_choice=True)
     env.auto_reset = False
@@ -260,7 +284,8 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     ff = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     u = UiState()
-    caption = "Stage 5 · instruction → local VLM → visuomotor policy"
+    caption = "Cable-driven robot · instruction → local VLM → student on the 6 motors" if args.cable \
+        else "Stage 5 · instruction → local VLM → visuomotor policy"
 
     view = {"box": None, "ring": None, "phase": ""}
 
@@ -271,7 +296,12 @@ def main():
 
     def write(scene, n=1):
         ov, tip = cameras()
-        row = bottom_row(ov, view["box"], view["ring"], tip, view["phase"])
+        act = None
+        if args.cable:
+            from actuator_viz import draw_actuators
+
+            act = draw_actuators(env, 0, SCENE_W - 860, H - SCENE_H, title=False)
+        row = bottom_row(ov, view["box"], view["ring"], tip, view["phase"], actuators=act)
         fr = compose(scene, u, caption, row).tobytes()
         for _ in range(n):
             ff.stdin.write(fr)
@@ -288,8 +318,11 @@ def main():
         ctrl.reset([0])
         sc = env.scenes[0]
         # same viewing direction as the Isaac window, centred on the three pipes of this scene
-        look = np.array([*sc.pipe_xy.mean(axis=0), TARGET[2] + 0.03])
-        eye = look + 0.7 * (np.array(EYE) - np.array(TARGET))            # inside the frame: no post in the way
+        if args.cable:                                     # the whole rig: motors + lead screws, cables, arm, pipes
+            eye, look = CABLE_EYE, CABLE_TARGET
+        else:
+            look = np.array([*sc.pipe_xy.mean(axis=0), TARGET[2] + 0.03])
+            eye = look + 0.7 * (np.array(EYE) - np.array(TARGET))        # inside the frame: no post in the way
         env.viewport_camera_controller.update_view_location(eye=tuple(eye), lookat=tuple(look))
         for _ in range(3):
             env.render()

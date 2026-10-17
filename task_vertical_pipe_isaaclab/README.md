@@ -428,6 +428,139 @@ a learned visuomotor policy for the motion), not an end-to-end VLA model. Next s
 VLA (e.g. SmolVLA) fine-tuned on (image, instruction, action) demonstrations generated with this
 pipeline.
 
+## Cable-driven robot: 6 lead-screw motors, 12 cables (`cable_env.py`)
+
+The envs above drive the 30 joints with position servos (joint angle = bend / 5). The real robot has
+no joint motors: six lead-screw motors wind cables through the routing discs. `cable_env.py` simulates
+that drive and lets the policy command the motors.
+
+| file | content |
+|---|---|
+| `cables.py` | routing geometry (hole of every cable on every disc), cable length Jacobian dl/dq, cable law, statics (equilibrium, motors for a pose), gravity torques, the lab's compensation formula |
+| `motors.py` | Ezi-Servo EzM-42M / EzM-56M closed-loop steppers, 8 mm lead screws (efficiency, inertia, pull-out curve), elevator torque |
+| `cable_env.py` | the task with the cable drive (motor / cable model integrated at every 2 ms physics step), cable drawing |
+| `analyze_torque.py` | motor torques during insertion episodes: summary, CSV, plot |
+| `tests/check_cable_env.py` | PhysX statics vs the model, single motors, controller formula, stability |
+
+Hardware from the thesis (*Control of Three-Section 3D Printed Tele-operated Wire-Driven Continuum Robot
+Arm*): 3 sections x 4 cables, each motor winds an antagonistic pair (cable at the motor angle in, the
+one opposite out). Motor angles / routing radii of the lab's controller: section 1 M1 0 deg, M2 90 deg,
+d 40 mm; section 2 M5 150 deg, M6 240 deg, d 30 mm; section 3 M3 30 deg, M4 300 deg, d 20 mm. A cable of
+section s runs from the base plate through every disc up to the last disc of its section, so the
+cables of sections 2 / 3 also act on the sections below (the "accumulative cable coupling" of thesis
+eq. 3.32). Motors: EzM-42M (0.44 N m holding, 54 g cm^2), EzM-56M (1.0 N m, 280 g cm^2) for motor 3
+(its "oversized housing") and the Z axis; lead 8 mm per turn (eq. 3.33).
+
+Model, every 2 ms physics step:
+1. **motors**: position loop (PID, 60 Hz bandwidth, anti-windup) on the rotor, torque clipped to the
+   pull-out torque at the current speed; the nut is moved against the cable load through the screw
+   (efficiency 0.60 driving / 0.42 back-driven from the T8 thread geometry, as implicit Coulomb thread
+   friction: the nut sticks while the torque is inside the friction band, like a real screw holding
+   its load);
+2. **cables**: tension T = k_c max(0, G q - S u + T0 / k_c) + damping (one-sided: a paid-out cable goes
+   slack; pre-tension T0 3 N), G = dl/dq from the hole geometry, u = nut positions;
+3. **arm**: joint torques -G^T T (a frictionless cable through the discs gives every joint it crosses
+   the torque T d), backbone springs k_j and damping on the joints (no servo), gravity on the arm
+   (0.43 kg; the elevator carriage is held by its screw, its weight goes into the elevator torque).
+
+The linear G matches the controller formula of the thesis to 0.1 mm and the exact path length through
+the holes to ~1 mm at 1.2 rad per section. Uncertain parameters (not measured on the robot): cable
+stiffness 3000 N/m (wire + Bowden sheath + tensioner), pre-tension 3 N, backbone spring 0.8 N m/rad per
+joint axis, thread friction 0.2, the shape of the pull-out curve.
+
+Why not PhysX tendons: spatial tendons apply the tendon force only at the root and leaf attachments
+(PhysxSchema docs), and fixed tendons, measured here with one cable at a time, spread the force
+unevenly over the chain (joint torques falling 5:4:3:2:1 from the base, about 1/10 of the tension)
+instead of T d at every joint. The cable law is therefore applied as joint torques; the PhysX statics
+then match the model (below).
+
+`tests/check_cable_env.py` (gravity on, 8 envs):
+- 8 random motor settings, 5 s to settle: PhysX pose = equilibrium of the model within 1.5e-3 rad per
+  joint (sections bent up to 65 deg); nut on target; motor torque inside the screw friction band;
+- one motor at a time, 12 mm: its section bends towards the motor angle (16 / 21 / 31 deg for sections
+  1 / 2 / 3; a rigid cable would give 17 / 23 / 34 deg), and the section above it bends the other way
+  (the coupling: winding M1 in by 10 mm bends section 1 by 13.6 deg and section 2 by -13.3 deg);
+- the lab's controller formula (commanded bend -> motor angles): 97 / 97 / 91 % of the commanded bend
+  is reached (elastic cables and backbone, gravity);
+- 400 steps of random motor actions: stable, no motor alarm; start states at rest.
+
+### Motor torques for the pipe insertion (`analyze_torque.py`)
+
+The joint-trained policy (`mujoco_ppo_vpipe_wide`) run unchanged through the lab's formula on the
+cable-driven robot with gravity: rig 18/20 success (2 rim hits in the first 20 steps), random pipe
+20/20. Over the 40 episodes (4049 steps, report in `reports/torque/mujoco_ppo_vpipe_wide_bend/`):
+
+| motor | peak | p99 | RMS | peak in wall contact | holding torque | margin |
+|---|---|---|---|---|---|---|
+| M1 (EzM-42M) | 19.2 mN m | 17.7 | 8.6 | 12.1 | 440 mN m | x22 |
+| M2 (EzM-42M) | 12.8 | 11.2 | 4.7 | 9.9 | 440 | x34 |
+| M5 (EzM-42M) | 19.5 | 14.2 | 5.4 | 9.2 | 440 | x21 |
+| M6 (EzM-42M) | 18.5 | 14.7 | 3.6 | 5.7 | 440 | x22 |
+| M3 (EzM-56M) | 16.4 | 13.6 | 4.1 | 7.1 | 1000 | x58 |
+| M4 (EzM-42M) | 23.1 | 17.9 | 6.9 | 12.4 | 440 | x17 |
+
+Highest cable tension 10.9 N (nut loads <= 11 N), motor speeds <= 410 rpm (pull-out torque there
+>= 400 mN m), no position-error alarm. The peaks come in ALIGN, while the S-curve is formed; the
+insertion itself (wall contacts included) needs less. While the S-curve is held the cable on the
+inside of a bend (M1a, M4b) goes slack and its antagonist carries ~8 N: with 3 N pre-tension the
+real robot would have backlash there. Elevator (EzM-56M): 0.074 N m while lowering (the 12.6 kg
+carriage back-drives the screw); lifting / starting against its weight needs 0.30 N m (x3.3).
+
+The torques scale with the uncertain parameters (backbone spring, cable stiffness and pre-tension,
+thread friction): they are the numbers to check against a measurement on the robot (e.g. the
+motor current while holding a bend), not a measurement themselves.
+
+```cmd
+%ISAAC% tests\check_cable_env.py
+%ISAAC% analyze_torque.py                                       :: torques, joint-trained policy through the lab's formula
+%ISAAC% train_vertical_pipe.py --cable --run-name ppo_cable     :: RL on the 6 motors (+ elevator)
+%ISAAC% analyze_torque.py --checkpoint models\ppo_cable\best_model.pt --action-mode motor
+%ISAAC% play_vertical_pipe.py --cable --checkpoint models\ppo_cable\best_model.pt   :: window, cables drawn
+%ISAAC% play_vertical_pipe.py --cable --action-mode bend --checkpoint models\mujoco_ppo_vpipe_wide\model.pt
+```
+
+### RL on the motors, tip-camera student, language (`cable_stages.py`)
+
+The PPO policy, the image-based student and the language pipeline of the sections above, on the
+cable-driven robot. The policies command the 6 motors (+ elevator); the scripted parts of the pipelines
+(search, approach to the pre-insertion pose) still think in bend vectors, which the env turns into
+motor targets with the cable model (`bend_map="model"`: elastic cables, backbone, gravity);
+`vision_pipeline.SearchInsertController` switches every env between the two (`set_drive_mode`).
+
+| | training | result (Isaac Sim) |
+|---|---|---|
+| PPO on the motors (`models/ppo_cable_128`) | 128 envs x 64 steps, 3M steps, 61 min; eval 100 % from 303k steps | 100 episodes: rig 99 %, random 97 % (1.9-2.4 s) |
+| student, tip camera + 6 motor encoders (`models/student_cable`) | DAgger from the PPO on the motors, 207k steps (student 100 % of its own episodes from iteration 11) | search + pre-insertion + student, 100 episodes: rig 100 %, random 100 % |
+| student for 3 pipes (`models/student_multi_cable`) | fine-tuned, 164k steps, 13 min | see the language row |
+| language (VLM + student) | - | 100 instructions, 3 pipes: VLM picks the right pipe 88 % (colour 89 %, position 85 %), whole task 87 %, insertion when the right pipe was picked 98.9 % (1 rim hit); 11 of the 13 failures are the VLM's (the robot then goes through the pipe it named); Qwen3-VL-2B 9.1 s per instruction on the CPU next to Isaac Sim |
+
+Motor torques of the PPO on the motors (`analyze_torque.py --checkpoint models\ppo_cable_128\best_model.pt
+--action-mode motor`, 40 episodes): peak 12-30 mN m (EzM-42M holds 440, EzM-56M 1000: margin x14-36),
+cable tension <= 13.9 N, no position-error alarm; elevator 0.30 N m to lift the carriage (x3.3).
+
+```cmd
+%ISAAC% train_vertical_pipe.py --cable --n-envs 128 --steps-per-env 64 --run-name ppo_cable_128
+%ISAAC% train_student.py --cable --run-name student_cable --num_envs 64 --iterations 50 --meshes
+%ISAAC% train_student.py --cable --multi --init models\student_cable\final.pt --meshes --num_envs 64 --iterations 40 --beta-iters 3 --buffer 150000 --run-name student_multi_cable
+%ISAAC% play_vision.py --cable --student models\student_cable\final.pt --episodes 100 --meshes
+%ISAAC% play_language.py --cable --episodes 100 --vlm-url http://127.0.0.1:8765/ground
+%ISAAC% record_cable_video.py --mode demo | ppo | student        :: 1920 x 1080 clips, drive drawn
+%ISAAC% record_ui_demo.py --cable --episodes 4                   :: command window + VLM
+%ISAAC% make_showcase_video.py --cable-project                   :: videos\linkedin_cable_robot.mp4
+```
+
+The clips draw the drive: the 12 cables through the disc holes, and the CAD's lead-screw drive over the
+arm (tension box, 6 screws in their cage, motors on top) brought to life - a nut runs on every screw
+(the static CAD nuts are removed from the mesh), a flag on the screw coupling turns with the rotor, the
+cable pair runs from the nut into the tension box - plus `actuator_viz.py`, the same drive as a diagram
+(rotor angle, rpm, motor torque, nut position, cable tensions). The aluminium frame is hidden in the
+full view (its beams are at the height of the arm).
+
+Actions (`action_mode`): `motor` (default) = 6 motor speeds (M1 M2 M5 M6 M3 M4, up to 0.3 / 0.6 / 0.7 mm
+per 20 ms step for sections 1 / 2 / 3) + elevator; the observation has the nut positions (encoders) in
+place of the bend commands. `bend` = the joint env's actions, turned into motor targets by the lab's
+formula; the observation is the joint env's, so policies trained there run unchanged.
+
 ## Notes
 
 - PhysX GPU pipeline only: on the CPU pipeline of Isaac Sim 5.1 the kinematic pipe is moved back to

@@ -54,6 +54,8 @@ parser.add_argument("--view", choices=["wide", "close"], default="wide",
                          "portrait, with a joint gauge; close = near the pipe")
 parser.add_argument("--output", type=str, default="")
 parser.add_argument("--hold", type=float, default=1.0, help="video: seconds to hold the end of each episode")
+parser.add_argument("--cable", action="store_true",
+                    help="cable-driven robot (cable_stages.CableVisionPipeEnv); the policy / student command the 6 motors")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
@@ -83,7 +85,13 @@ GAUGE_H = VIEW_H - CAM_PANEL                # wide: joint gauge below the tip ca
 
 
 def make_env(modes, num_envs, render, meshes):
-    cfg = VisionPipeEnvCfg()
+    if args.cable:
+        from cable_stages import CableVisionPipeEnv, CableVisionPipeEnvCfg
+
+        cfg = CableVisionPipeEnvCfg()
+        cfg.show_cables = render
+    else:
+        cfg = VisionPipeEnvCfg()
     cfg.scene.num_envs = num_envs
     cfg.pipe_modes = tuple(modes)
     cfg.max_episode_steps = args.max_steps
@@ -100,7 +108,7 @@ def make_env(modes, num_envs, render, meshes):
         cfg.viewer.resolution = res
         cfg.viewer.lookat = tuple(float(v) for v in lookat)
         cfg.viewer.eye = tuple(float(v) for v in eye)
-    return VisionPipeEnv(cfg, render_mode="rgb_array" if render else None)
+    return (CableVisionPipeEnv if args.cable else VisionPipeEnv)(cfg, render_mode="rgb_array" if render else None)
 
 
 # ---------------------------------------------------------------------------

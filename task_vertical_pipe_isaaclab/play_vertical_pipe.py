@@ -51,6 +51,12 @@ parser.add_argument("--output", type=str, default="", help="MP4 path (default vi
 parser.add_argument("--slowdown", type=float, default=1.0, help=">1 plays slower than real time")
 parser.add_argument("--hold", type=float, default=1.2, help="seconds to hold the final pose of each episode")
 parser.add_argument("--no-meshes", action="store_true", help="show the collision cylinders instead of the CAD meshes")
+parser.add_argument("--cable", action="store_true", help="cable-driven robot (cable_env.py)")
+parser.add_argument("--action-mode", choices=["motor", "bend"], default="motor",
+                    help="--cable: motor = cable-trained policy, bend = joint-trained policy + the lab's cable formula")
+parser.add_argument("--no-gravity", action="store_true", help="--cable: no gravity on the arm")
+parser.add_argument("--hide-cables", action="store_true", help="--cable: do not draw the 12 cables")
+parser.add_argument("--cable-radius-mm", type=float, default=1.4, help="--cable: drawn cable radius (mm)")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
@@ -66,6 +72,7 @@ from rsl_rl.models import MLPModel  # noqa: E402
 
 import constants as C  # noqa: E402
 from agent_cfg import make_agent_cfg  # noqa: E402
+from cable_env import CableVerticalPipeEnv, CableVerticalPipeEnvCfg  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
 from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg  # noqa: E402
 
@@ -100,7 +107,12 @@ def load_actor(path):
 
 
 def make_env(modes, num_envs, visual, render_mode=None):
-    cfg = VerticalPipeEnvCfg()
+    cfg = CableVerticalPipeEnvCfg() if args.cable else VerticalPipeEnvCfg()
+    if args.cable:
+        cfg.action_mode = args.action_mode
+        cfg.gravity = not args.no_gravity
+        cfg.show_cables = cfg.show_actuators = visual and not args.hide_cables   # cables + lead-screw drive
+        cfg.cable_draw_radius = args.cable_radius_mm / 1000.0
     cfg.scene.num_envs = num_envs
     cfg.pipe_modes = tuple(modes)
     cfg.max_episode_steps = args.max_steps
@@ -112,7 +124,7 @@ def make_env(modes, num_envs, visual, render_mode=None):
     cfg.sim.device = args.device
     if args.video:
         cfg.viewer.resolution = (1280, 720)
-    return VerticalPipeEnv(cfg, render_mode=render_mode)
+    return (CableVerticalPipeEnv if args.cable else VerticalPipeEnv)(cfg, render_mode=render_mode)
 
 
 def act(actor, obs, env):
@@ -165,7 +177,7 @@ def draw_hud(cv2, frame, env, i, ep, n_eps, step, successes, finished_text):
     font = cv2.FONT_HERSHEY_SIMPLEX
     info = env.info(i)
     overlay = frame.copy()
-    cv2.rectangle(overlay, (10, 10), (560, 230), (18, 20, 26), -1)
+    cv2.rectangle(overlay, (10, 10), (560, 280 if "motor_torque" in info else 230), (18, 20, 26), -1)
     cv2.addWeighted(overlay, 0.72, frame, 0.28, 0, frame)
 
     def put(text, y, color=(230, 230, 230), scale=0.45, thick=1):
@@ -182,6 +194,13 @@ def draw_hud(cv2, frame, env, i, ep, n_eps, step, successes, finished_text):
     put(f"Elevator: {info['elevator_mm']:+6.1f} mm  (motor {info['elevator_motor_deg']:+7.0f} deg)", 166)
     m = info["motor_angles"]
     put("Lead-screw motors (deg): " + " ".join(f"{v:+5.0f}" for v in m), 190, (170, 200, 240))
+    if "motor_torque" in info:                     # cable-driven robot
+        tau = info["motor_torque"] * 1000.0
+        put("Motor torque (mN m) M1 M2 M5 M6 M3 M4: " + " ".join(f"{v:+5.1f}" for v in tau), 214, (170, 240, 200))
+        put(f"Cable tension max {info['cable_tension'].max():4.1f} N | elevator motor {info['elevator_torque']:.3f} N m", 238,
+            (170, 240, 200))
+        put("Bend (deg): " + " ".join(f"{b:4.1f}@{d:3.0f}" for b, d in zip(info["bend_deg"], info["bend_dir_deg"])), 262,
+            (170, 240, 200))
     if finished_text:
         (tw, th), _ = cv2.getTextSize(finished_text, font, 0.9, 2)
         x, y = (frame.shape[1] - tw) // 2, frame.shape[0] - 60
