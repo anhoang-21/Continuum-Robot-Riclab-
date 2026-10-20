@@ -21,8 +21,8 @@ step language_t525 $PY play_language.py --cable --robust train --pretension 5.25
 step language_t525_safe $PY play_language.py --cable --robust train --pretension 5.25 --safe loadcell_id --episodes 48 \
   --vlm-url $VLM --json reports/language/language_t525_safe.json
 step video_before $PY record_safety_video.py --policy models/ppo_cable_128/best_model.pt \
-  --label "PPO of the cable stage, T0 = 3 N" --pretension 3 --level train --episodes 3 --output videos/safety_before.mp4
+  --label "PPO of the cable stage" --pretension 3 --level train --episodes 3 --output videos/safety_before.mp4
 step video_after $PY record_safety_video.py --policy models/lag_t525/best_safe_model.pt \
-  --label "PPO-Lagrangian + CBF, T0 = 5.25 N" --pretension 5.25 --cbf --cbf-source loadcell_id --level train \
+  --label "PPO-Lagrangian + CBF" --pretension 5.25 --cbf --cbf-source loadcell_id --level train \
   --episodes 3 --output videos/safety_after.mp4
 echo "=== all done"

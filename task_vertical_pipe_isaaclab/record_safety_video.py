@@ -108,7 +108,7 @@ def monitor(env, i, hist, cbf, t_min, t_max):
     cv2.putText(p, f"{args.label}   |   pre-tension T0 = {args.pretension:g} N", (20, 78), FONT, 0.55, WHITE, 1, AA)
     # bars
     T_r, T_n = env.tension[i].cpu().numpy(), env.ucm.T_n[i].cpu().numpy()
-    top, bot, x0, bw, gap = 130, 560, 70, 34, 12
+    top, bot, x0, bw, gap = 130, 560, 70, 32, 10
     tmax_axis = 16.0
     ypix = lambda v: int(bot - (bot - top) * min(v, tmax_axis) / tmax_axis)  # noqa: E731
     for v in range(0, 17, 4):
@@ -123,10 +123,10 @@ def monitor(env, i, hist, cbf, t_min, t_max):
         cv2.rectangle(p, (x, ypix(T_r[c])), (x + bw, bot), col, -1)
         cv2.line(p, (x - 3, ypix(T_n[c])), (x + bw + 3, ypix(T_n[c])), WHITE, 2)
         cv2.putText(p, CB.CABLE_NAMES[c], (x + 1, bot + 22), FONT, 0.42, SECTION_COL[s], 1, AA)
-        x += bw + gap + (14 if c % 4 == 3 else 0)
+        x += bw + gap + (12 if c % 4 == 3 else 0)
     for v, name in ((t_min, "T_min"), (t_max, "T_max")):
         cv2.line(p, (x0 - 8, ypix(v)), (PANEL_W - 30, ypix(v)), CYAN, 2)
-        cv2.putText(p, f"{name} {v:g} N", (PANEL_W - 150, ypix(v) - 6), FONT, 0.5, CYAN, 1, AA)
+        cv2.putText(p, f"{name} {v:g} N", (PANEL_W - 140, ypix(v) - 8 if name == "T_max" else ypix(v) + 20), FONT, 0.5, CYAN, 1, AA)
     cv2.putText(p, "bars: robot-side tension   white tick: nut side (load cell)", (20, bot + 52), FONT, 0.45, GREY, 1, AA)
     # numbers
     viol = np.array(hist["viol"]) if hist["viol"] else np.zeros(1)
@@ -204,8 +204,8 @@ def main():
                     continue
                 scene = cv2.resize(cv2.cvtColor(np.ascontiguousarray(scene_frame(env)), cv2.COLOR_RGB2BGR),
                                    FULL_VIEW[0], interpolation=cv2.INTER_AREA)
-                banner(scene, f"Isaac Sim  |  {args.label}  |  robot {ep + 1}/{args.episodes} of the "
-                              f"'{args.level}' uncertainty set  |  t = {step * 0.02:4.2f} s")
+                banner(scene, f"Isaac Sim  |  {args.label}  |  robot {ep + 1}/{args.episodes} ({args.level} set)  |  "
+                              f"t = {step * 0.02:4.2f} s")
                 if name:
                     badge(scene, "THROUGH THE PIPE!" if name == "success" else name.upper().replace("_", " "),
                           name == "success")
