@@ -9,7 +9,8 @@ PY=/d/Isaacsim/env_isaacsim62/Scripts/python.exe
 COMMON="--robust train --resume models/ppo_cable_128/best_model.pt --n-envs 512 --steps-per-env 32 \
  --timesteps 2000000 --eval-freq 200000 --eval-episodes 128 --checkpoint-freq 500000"
 
-run() {   # run-name, extra args
+run() {   # run-name, extra args (skipped when models/<run>/final_model.pt exists: the queue can be restarted)
+  if [ -f "models/$1/final_model.pt" ]; then echo "=== skip $1 (done)"; return; fi
   echo "=== $(date +%H:%M:%S) start $1"
   $PY train_vertical_pipe.py $COMMON --run-name "$1" "${@:2}" > "logs/s6_train_$1.log" 2>&1
   echo "=== $(date +%H:%M:%S) end $1 (exit $?)"
@@ -23,6 +24,7 @@ run dr_t3       --priv critic --pretension 3
 run teacher_t525 --constrained --priv both --pretension 5.25
 run lag_t525_lc --constrained --priv critic --obs-tension --pretension 5.25
 
+if [ -f models/rma_t525/final.pt ]; then echo "=== skip rma (done)"; echo "=== all done"; exit 0; fi
 echo "=== $(date +%H:%M:%S) start rma"
 $PY train_rma.py --teacher models/teacher_t525/best_safe_model.pt --pretension 5.25 --num-envs 256 \
   --iterations 60 --run-name rma_t525 > logs/s6_train_rma_t525.log 2>&1

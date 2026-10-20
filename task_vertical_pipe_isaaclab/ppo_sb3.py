@@ -73,6 +73,9 @@ class SB3PPO(PPO):
             time_outs = time_outs.to(self.device).bool().view(-1)
             if time_outs.any():
                 final = TensorDict({"policy": extras["terminal_obs"].to(self.device)}, batch_size=[time_outs.shape[0]])
+                for g in obs.keys():
+                    if g != "policy":   # e.g. a privileged critic's parameters: the next robot's stand in
+                        final[g] = obs[g].to(self.device)
                 final_values = self.critic(final).detach().view(-1)
                 rewards = rewards + self.gamma * final_values * time_outs.to(rewards.dtype)
         super().process_env_step(obs, rewards, dones, extras)
