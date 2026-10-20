@@ -1,0 +1,2 @@
+# shell scripts run in Git Bash: keep LF on checkout (core.autocrlf would turn them into CRLF)
+*.sh text eol=lf
