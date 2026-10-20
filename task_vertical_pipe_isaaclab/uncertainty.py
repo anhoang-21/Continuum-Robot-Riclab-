@@ -86,17 +86,22 @@ class UncertaintySet:
     ranges: dict = field(default_factory=dict)
 
     @classmethod
-    def make(cls, level: str = "nominal") -> "UncertaintySet":
+    def make(cls, level: str = "nominal", t0: float = NOMINAL["t0"]) -> "UncertaintySet":
+        """The ranges of `level`; the pre-tension ranges scale with the design pre-tension t0 (N)."""
         if level not in LEVELS:
             raise ValueError(f"uncertainty level must be one of {LEVELS}, got {level!r}")
         if level == "nominal":
-            return cls(level, {k: (v, v) for k, v in NOMINAL.items()})
-        return cls(level, copy.deepcopy(RANGES[level]))
+            out = cls(level, {k: (v, v) for k, v in NOMINAL.items()})
+        else:
+            out = cls(level, copy.deepcopy(RANGES[level]))
+        s = t0 / NOMINAL["t0"]
+        out.ranges["t0"] = (out.ranges["t0"][0] * s, out.ranges["t0"][1] * s)
+        return out
 
     @classmethod
-    def from_json(cls, path: str, base: str = "train") -> "UncertaintySet":
+    def from_json(cls, path: str, base: str = "train", t0: float = NOMINAL["t0"]) -> "UncertaintySet":
         """Ranges of `base`, with the entries of the file (sysid.py: {"ranges": {name: [lo, hi]}}) replacing them."""
-        out = cls.make(base)
+        out = cls.make(base, t0)
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         for k, (lo, hi) in data.get("ranges", {}).items():
@@ -148,8 +153,8 @@ class UncertaintySet:
         }
 
 
-def nominal_params(n: int) -> dict:
-    return UncertaintySet.make("nominal").sample(np.random.default_rng(0), n)
+def nominal_params(n: int, t0: float = NOMINAL["t0"]) -> dict:
+    return UncertaintySet.make("nominal", t0).sample(np.random.default_rng(0), n)
 
 
 def privileged(p: dict) -> np.ndarray:

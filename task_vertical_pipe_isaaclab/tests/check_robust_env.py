@@ -302,7 +302,7 @@ def check_backlash(env):
 
 def check_stability(env):
     print(f"\n5. 'ood' robots, random actions with the pipes in place, {args.stability_steps} steps with resets")
-    env.uset = U.UncertaintySet.make("ood")
+    env.set_uncertainty("ood")
     env.randomized = True
     env.auto_reset = True
     env.cfg.max_episode_steps = 100                         # short episodes: many robots

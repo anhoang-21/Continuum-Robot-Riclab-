@@ -74,14 +74,18 @@ class RobustCableEnv(CableVerticalPipeEnv):
     def __init__(self, cfg: RobustCableEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)          # captures the nominal drive graph (replaced below)
         n, dev = self.num_envs, self.device
-        self.uset = (U.UncertaintySet.from_json(cfg.uncertainty_json, cfg.uncertainty) if cfg.uncertainty_json
-                     else U.UncertaintySet.make(cfg.uncertainty))
+        t0 = cfg.cable_pretension
+        self.uset = (U.UncertaintySet.from_json(cfg.uncertainty_json, cfg.uncertainty, t0) if cfg.uncertainty_json
+                     else U.UncertaintySet.make(cfg.uncertainty, t0))
         self.randomized = cfg.uncertainty != "nominal" or bool(cfg.uncertainty_json)
         self.ucm = UncertainCableModel(self.geom, n, dev)
+        self._dk_j = torch.zeros(n, 1, dtype=torch.float64, device=dev)       # k_j - nominal (explicit part)
+        self._dc_j = torch.zeros(n, 1, dtype=torch.float64, device=dev)       # c_j - nominal
         self.statics = StaticSolver(self.geom, self.gravity_model)
         self._prm_rngs = [np.random.default_rng(cfg.seed + 5000 + i) for i in range(n)]
         self._prm_eval_rngs = [np.random.default_rng(cfg.seed + 6000 + i) for i in range(n)]
-        self.prm = U.nominal_params(n)                       # numpy, the parameters of every env
+        self.prm = U.nominal_params(n, t0)                   # numpy, the parameters of every env
+        self.ucm.set_params(torch.arange(n, device=dev), self.prm)   # (the design pre-tension of cfg)
         f32 = torch.float32
         self.priv = torch.zeros(n, U.PRIV_DIM, dtype=f32, device=dev)
         self.latency = torch.zeros(n, dtype=torch.bool, device=dev)
@@ -104,6 +108,7 @@ class RobustCableEnv(CableVerticalPipeEnv):
             "cost_slack", "cost_over", "cost_contact", "viol_steps", "slack_steps", "over_steps",
             "contact_viol_steps", "t_max", "t_min", "f_max")}
         self.ep["t_min"].fill_(np.inf)
+        self.safety_filter = None                             # safety_filter.TensionCBF on the motor steps
         self._cable_graph = self._capture_cable_graph()       # now with the uncertain model
 
     # ------------------------------------------------------------------
@@ -120,7 +125,9 @@ class RobustCableEnv(CableVerticalPipeEnv):
         model.begin_step(Gq, motors.x)
         motors.step(self.physics_dt, x0, x1, lambda x, v: model.nut_load(Gq, Gqd, x, v))
         self.tension.copy_(model.end_step(Gq, Gqd, motors.x, motors.v))
-        self._efforts[:, self._jchain] = model.joint_torque(self.tension).float()
+        # backbone: PhysX drives keep the nominal k_j / c_j; the robot's deviation from them acts here
+        backbone = -self._dk_j * self._g_q - self._dc_j * self._g_qd
+        self._efforts[:, self._jchain] = (model.joint_torque(self.tension) + backbone).float()
 
     def _capture_cable_graph(self):
         if not hasattr(self, "ucm"):
@@ -133,9 +140,17 @@ class RobustCableEnv(CableVerticalPipeEnv):
         return graph
 
     def _cable_substep(self, frac0, frac1):
-        # the scene writes the external wrench before the first physics step of an env step only
+        # the scene writes the external wrench before the first physics step of an env step only: apply it again
+        # (just the force call; the full write_data_to_sim also rewrites every joint target, ~1 ms per call)
         if self._wrench_on and frac0 > 0.0:
-            self.robot.write_data_to_sim()
+            r = self.robot
+            if r.data.has_body_ordering:
+                r.write_data_to_sim()
+            else:
+                f, t, is_global = r.permanent_wrench_composer.get_forces_and_torques()
+                r.root_view.apply_forces_and_torques_at_position(
+                    force_data=f.flatten().view(wp.float32), torque_data=t.flatten().view(wp.float32),
+                    position_data=None, indices=r._ALL_INDICES, is_global=is_global)
         super()._cable_substep(frac0, frac1)
 
     def _pre_physics_step(self, actions: torch.Tensor):
@@ -153,6 +168,11 @@ class RobustCableEnv(CableVerticalPipeEnv):
                     self._push_force[ids] = 0.0
                     self._update_wrench(ids)
         super()._pre_physics_step(a)
+        if self.safety_filter is not None:
+            # the motor step of whatever drove the env (policy speeds or bend-mapped targets) through the CBF
+            du_safe = self.safety_filter(self.motor_cmd - self._motor_cmd_prev)
+            u_max = self.cable_model.u_max
+            self.motor_cmd.copy_(torch.maximum(torch.minimum(self._motor_cmd_prev + du_safe, u_max), -u_max))
 
     # ------------------------------------------------------------------
     # External force on the tip: payload (permanent) and pushes (stress tests)
@@ -175,6 +195,12 @@ class RobustCableEnv(CableVerticalPipeEnv):
     # ------------------------------------------------------------------
     # Parameters of the envs (drawn at every start state)
     # ------------------------------------------------------------------
+    def set_uncertainty(self, level: str, json_path: str = ""):
+        """Draw the robots of the next resets from this uncertainty level (relative to cfg.cable_pretension)."""
+        t0 = self.cfg.cable_pretension
+        self.uset = U.UncertaintySet.from_json(json_path, level, t0) if json_path else U.UncertaintySet.make(level, t0)
+        self.randomized = True
+
     def _draw_params(self, ids):
         rngs = self._prm_eval_rngs if getattr(self, "_eval", False) else self._prm_rngs
         draws = [self.uset.sample(rngs[i], 1) for i in ids]
@@ -193,13 +219,11 @@ class RobustCableEnv(CableVerticalPipeEnv):
         J = m.J[None]
         m.kp[idx], m.kd[idx], m.ki[idx] = J * w * w, 2.0 * 0.8 * J * w, J * w ** 3 / 8.0
         m.i_max[idx] = m.hold[None] / m.ki[idx]
-        # backbone springs / damping (PhysX drive gains of the bending joints)
-        if self.randomized:
-            nj = len(self._jchain)
-            k_j = torch.as_tensor(prm["k_j"], dtype=torch.float32, device=self.device)[:, None].expand(-1, nj).contiguous()
-            c_j = torch.as_tensor(prm["c_j"], dtype=torch.float32, device=self.device)[:, None].expand(-1, nj).contiguous()
-            self.robot.write_joint_stiffness_to_sim_index(stiffness=k_j, joint_ids=self._jchain, env_ids=idx)
-            self.robot.write_joint_damping_to_sim_index(damping=c_j, joint_ids=self._jchain, env_ids=idx)
+        # backbone springs / damping: the PhysX drives hold the nominal gains (no model-property writes at every
+        # reset); the difference of this robot's k_j / c_j is an explicit joint torque in _cable_math
+        t64 = lambda k: torch.as_tensor(prm[k], dtype=torch.float64, device=self.device)[:, None]  # noqa: E731
+        self._dk_j[idx] = t64("k_j") - self.cfg.backbone_stiffness
+        self._dc_j[idx] = t64("c_j") - self.cfg.backbone_damping
         self.latency[idx] = torch.as_tensor(prm["latency"] > 0, device=self.device)
         self.pos_noise[idx] = torch.as_tensor(prm["pos_noise"], dtype=torch.float64, device=self.device)
         self.tension_noise[idx] = torch.as_tensor(prm["tension_noise"], dtype=torch.float64, device=self.device)
@@ -289,6 +313,8 @@ class RobustCableEnv(CableVerticalPipeEnv):
         pose[:, 6] = 1.0                                   # identity quaternion (x, y, z, w)
         self.pipe.write_root_pose_to_sim_index(root_pose=pose, env_ids=idx)
         # episode bookkeeping
+        if self.safety_filter is not None:
+            self.safety_filter.reset(ids)
         self._act_buf[idx] = 0.0
         self.contact_force[idx] = 0.0
         self.cost[idx] = 0.0
