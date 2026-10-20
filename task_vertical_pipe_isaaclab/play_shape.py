@@ -46,6 +46,8 @@ parser.add_argument("--robots", type=int, default=32)
 parser.add_argument("--seconds", type=float, default=10.0)
 parser.add_argument("--payload-step", action="store_true", help="hang 50 g on the tip at t = 5 s")
 parser.add_argument("--pretension", type=float, default=None)
+parser.add_argument("--cbf-source", choices=["loadcell", "loadcell_id", "model", "oracle"], default="loadcell",
+                    help="tension estimate of the \"+cbf\" controllers (safety_filter.TensionCBF)")
 parser.add_argument("--seed", type=int, default=11)
 parser.add_argument("--tag", type=str, default="shape")
 AppLauncher.add_app_launcher_args(parser)
@@ -84,7 +86,7 @@ def make_controller(name, env):
     else:
         raise ValueError(name)
     c.name = name
-    c.cbf = TensionCBF(env, source="loadcell") if name.endswith("+cbf") else None
+    c.cbf = TensionCBF(env, source=args.cbf_source) if name.endswith("+cbf") else None
     return c
 
 

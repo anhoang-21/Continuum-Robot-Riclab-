@@ -36,8 +36,17 @@ Videos (policy trained in MuJoCo, run in Isaac Sim): [12 random pipes, two-panel
 | `language_pipeline.py`, `play_language.py` | instruction -> VLM -> pipe -> pre-insertion pose -> image-based student; statistics / MP4 |
 | `make_grounding_set.py`, `eval_grounding.py` | grounding benchmark: rendered scenes with ground truth, VLM accuracy without Isaac Sim |
 | `make_showcase_video.py` | 1080p project video: title cards + MuJoCo / tip-camera / student / language clips + results |
+| `uncertainty.py`, `uncertain_cables.py`, `robust_env.py` | Stage 6: uncertainty set, cable drive with capstan friction / backlash / payload per env, the env with safety costs |
+| `sysid_experiments.py`, `sysid.py`, `plot_sysid.py` | Stage 6: identification experiments on hidden robots, output-error fit per sensor set |
+| `pretension_study.py`, `safety_filter.py` | Stage 6: pre-tension design, robust CBF filter on the 12 cable tensions |
+| `ppo_lag.py`, `rma.py`, `train_rma.py`, `controllers.py` | Stage 6: PPO-Lagrangian, RMA adaptation module, loading any controller |
+| `shape_control.py`, `play_shape.py` | Stage 6: model-based shape control (lab formula, inverse statics, PI, adaptive) |
+| `benchmark_safety.py`, `plot_safebench.py` | Stage 6: K22-SafeBench (controllers x uncertainty x stress), tables and figures |
+| `record_safety_video.py`, `robust_stages.py` | Stage 6: clips with the tension band monitor; the Stage 4 / 5 envs on uncertain robots with the filter |
+| `scripts/stage6_*.sh`, `docs/stage6_theory.md` | Stage 6: training / benchmark / demo queues; derivations |
 | `tests/compare_with_mujoco.py` | checks against the MuJoCo env (runs in the MuJoCo venv) |
 | `tests/check_isaac_env.py` | checks of the Isaac env, replay of MuJoCo trajectories in PhysX |
+| `tests/check_robust_env.py`, `tests/check_safety_filter.py` | Stage 6: the uncertain twin against the nominal model / PhysX statics; the CBF QP against OSQP |
 | `assets/mjcf/ContinuumRobot_Native.xml` | source MJCF (copy of `urdf/ContinuumRobot_Native.xml`) |
 
 ## Run
@@ -572,6 +581,378 @@ Actions (`action_mode`): `motor` (default) = 6 motor speeds (M1 M2 M5 M6 M3 M4, 
 per 20 ms step for sections 1 / 2 / 3) + elevator; the observation has the nut positions (encoders) in
 place of the bend commands. `bend` = the joint env's actions, turned into motor targets by the lab's
 formula; the observation is the joint env's, so policies trained there run unchanged.
+
+## Stage 6: safe and robust control under uncertainty (ND1-ND5)
+
+The thesis topic - *intelligent control and motion optimisation of cable-driven continuum robots under
+uncertainties and safety constraints* (`CAI_TIEN_ROBOT_K22_CHO_DE_TAI.md`) - asks for more than a policy that
+threads the pipe: the robot's parameters are not known (ND1), the controller has to cope with that (ND2, ND3),
+the cable tensions must stay inside a band (ND4), and all of it has to be measured (ND5). Stage 6 does this on
+the cable-driven robot in simulation, and says in numbers what the real K22 needs for it.
+
+The starting point, measured with `benchmark_safety.py` (100 episodes per pipe mode, seed 9000): the motor
+policy of the cable stage (`ppo_cable_128`) keeps its **success** on robots it was not trained on (98.5 %
+nominal, 98.5 % train set, 98.0 % ood set - the shape feedback in its observation absorbs the parameter
+errors), but not its **safety**: a cable is outside [0.5, 10] N in 43 % of the steps on the nominal robot,
+60-62 % on uncertain robots, the highest tension (p95) rises 13.8 -> 16.2 -> 21.5 N. Mostly the inner cable of
+a bent section goes slack while the S-curve is held.
+
+| | question | files |
+|---|---|---|
+| ND1 | what is uncertain; what can be identified, with which sensors? | `uncertainty.py`, `uncertain_cables.py`, `robust_env.py`, `sysid_experiments.py`, `sysid.py` |
+| ND2 | model-based shape control, fixed and adaptive | `shape_control.py`, `play_shape.py` |
+| ND3 | RL that is robust, adaptive and constrained | `train_vertical_pipe.py --robust --constrained --priv`, `ppo_lag.py`, `rma.py`, `train_rma.py` |
+| ND4 | every cable inside [T_min, T_max] | `pretension_study.py`, `safety_filter.py`, `docs/stage6_theory.md` |
+| ND5 | one benchmark for everything | `benchmark_safety.py`, `plot_safebench.py`, `record_safety_video.py` |
+
+The derivations (pre-tension invisibility, the pre-tension bound, the tension sensitivity, the robust CBF
+condition, PPO-Lagrangian, adaptation) are in [`docs/stage6_theory.md`](docs/stage6_theory.md).
+
+**In short** (all numbers from runs in this repository, sections below):
+
+- **Pre-tension 3 N -> 5.25 N** (the optimum (T_min + T_max) / 2): the *unchanged* policy goes from 43 % to 6 % of
+  the steps outside the band - the cheapest and largest gain.
+- **PPO-Lagrangian at 5.25 N**: 98 % success with 0.2 % of the steps outside the band on the nominal robot, 13.4 %
+  on uncertain robots (unconstrained: 33.8 %). At 3 N the constraints are infeasible and the policy leans on the pipe.
+- **Tension CBF**: 0.0 % on the nominal robot at unchanged success; on uncertain robots it holds the band but needs
+  the robot-side tension to keep the success (72 % -> 97 %).
+- **Identification**: only load cells make the pre-tension and the friction identifiable (T0 error 23 % -> 3 %).
+- **What did not work**: PI / adaptive shape control (no gain over inverse statics under the motor rate limit),
+  knowing the robot's parameters (teacher / RMA = the blind policy), safety on out-of-distribution robots, and the
+  camera / language pipeline of Stages 4-5 on uncertain robots (62 % task success; the filter does not hold the band there).
+
+Video: [`media/stage6_safe_k22.mp4`](media/stage6_safe_k22.mp4) (`make_showcase_video.py --stage6`).
+
+### 6.1 The cable drive under uncertainty (`uncertainty.py`, `uncertain_cables.py`, `robust_env.py`)
+
+`RobustCableEnv` is `CableVerticalPipeEnv` with a robot drawn from an uncertainty set at every reset. The
+set lists what the cable stage only estimated (README above, "Uncertain parameters") and what it left out:
+
+| parameter | per | nominal | train set | ood set |
+|---|---|---|---|---|
+| cable stiffness k_c | cable (*) | 3000 N/m | 2000-4500 | 1500-6000 |
+| pre-tension T0 | cable (*) | T0 | (0.67-1.33) T0 | (0.5-1.67) T0 |
+| pair asymmetry (cable b: T0 (1 - a)) | pair | 0 | 0-0.2 | 0-0.35 |
+| backbone spring k_j / damping c_j | robot | 0.8 / 1.0 | 0.6-1.0 / 0.6-1.5 | 0.5-1.2 / 0.4-2.0 |
+| cable damping | cable | 5 N s/m | 2-8 | 1-10 |
+| capstan friction mu theta (sheath + disc holes) | cable (*) | 0 | 0-0.30 | 0-0.45 |
+| compliance split phi (nut side of the friction) | cable | 0.5 | 0.3-0.7 | 0.2-0.8 |
+| nut backlash | motor | 0 | 0-0.3 mm | 0-0.6 mm |
+| motor position-loop bandwidth | motor | 60 Hz | 40-80 | 30-90 |
+| tip payload | robot | 0 | 0-30 g | 0-50 g |
+| one-step command latency | robot | never | p 0.3 | p 0.5 |
+| mocap / load-cell noise | - | 0 | 0.5 mm / 0.1 N | 1 mm / 0.2 N |
+
+(*) drawn per robot, then every cable / motor spread around it (log-normal, 10 % / 20 %).
+
+- **Friction**: the capstan element of `home_hysteresis.py` (nut-side spring k_n = k_c / phi, friction
+  element, robot-side spring k_r = k_c / (1 - phi)): the cable sticks while
+  e^(-mu theta) <= T_nut / T_robot <= e^(mu theta) and slides on the bound otherwise - closed-form, per cable,
+  inside the CUDA graph of the cable step. **Backlash**: a play operator between screw and nut.
+  **Payload**: a point mass on Seg15. Latency, noisy mocap (and optional noisy load cells in the observation).
+- Every episode starts at the equilibrium of the robot's *true* parameters under the motor positions of the
+  *nominal* model: the controller believes the nominal robot, the robot is not.
+- Per step the env reports the safety signals: tensions outside [T_min, T_max] = [0.5, 10] N (slack /
+  over-tension), the force on the pipe over F_max = 2 N (contact data of PhysX), and the costs of the
+  constrained RL; per episode the share of steps outside the band, the extremes.
+
+`tests/check_robust_env.py` (Isaac Sim, all pass): without friction / backlash the model is bit-identical to
+`cables.CableModel` and the env runs the same trajectory as `CableVerticalPipeEnv` (0.0 difference); the
+capstan ratio stays inside e^(+-mu theta) and the dead band after a reversal is 0.640 mm (predicted
+0.648 mm); PhysX statics of robots with drawn parameters + payload = `StaticSolver` within 0.04 deg per
+section (50 g change a section bend by 0.78 deg in PhysX and in the model); friction leaves a residual bend
+growing with mu theta and a hysteresis loop 2.9 x wider at mu theta 0.45; a screw move inside the backlash
+does not move the arm; 4000 steps on ood robots without instability.
+
+### 6.2 Identification: which sensors does the K22 need? (`sysid_experiments.py`, `sysid.py`)
+
+Which parameters can be identified, and which sensors does it take? `sysid_experiments.py` runs the
+protocol the K22 would run - every motor alone through a triangle (friction loops, backlash at the
+reversals, coupling), six random multi-motor waypoints, three bent poses with 0 / 20 / 50 g on the tip - at
+1 mm/s with a short hold before every sample, on 8 robots of the train set whose parameters are hidden. It
+logs what the robot's sensors would give: the 6 encoders, the 12 nut-side tensions (load cells, P0.1 of the
+improvement document), the centres of the discs 5 / 10 / 15 (mocap, P0.2) and their tilt (the MPU6050 IMUs
+the K22 has today). `sysid.py` fits the 25 parameters of the quasi-static model (cable stiffness per
+section, pre-tension per cable, backbone spring, capstan friction per section, backlash per motor) by
+output-error Levenberg-Marquardt on the noise-weighted residuals (0.5 mm mocap, 0.1 N load cells, 0.5 deg
+IMU), with 95 % intervals from the Fisher information. The data schema is the one the real robot should
+log, so the same script fits the K22.
+
+Median error over the 8 robots (in brackets: the median 95 % half-width the fit claims):
+
+| sensors (+ the 6 encoders) | cable stiffness | pre-tension | backbone spring | friction mu theta | backlash |
+|---|---|---|---|---|---|
+| IMU (today) | 24.7 % (+-9.7) | 23.0 % (+-15.5) | 25.5 % (+-10.5) | 0.035 (+-0.093) | 0.041 mm (+-0.095) |
+| mocap | 25.3 % (+-1.8) | 13.9 % (+-7.9) | 11.3 % (+-0.9) | 0.064 (+-0.018) | 0.039 mm (+-0.032) |
+| load cells | 13.1 % (+-4.3) | 9.5 % (+-6.6) | 4.2 % (+-0.4) | 0.006 (+-0.002) | 0.030 mm (+-0.015) |
+| mocap + load cells | 22.4 % (+-1.4) | **3.2 %** (+-1.4) | 5.8 % (+-0.5) | **0.006** (+-0.002) | 0.064 mm (+-0.014) |
+
+![identification error per sensor set](media/stage6_sysid_sensors.png)
+
+- **With today's IMUs the fit reaches the noise level (chi^2/N = 1.0) with wrong parameters** (23-26 %
+  off): many parameter sets explain the tilts equally well. Its wide intervals say so honestly.
+- **Load cells are what makes the robot identifiable**: the pre-tension (invisible in the shape, 6.3) drops
+  from 23 % to 9.5 % (3.2 % with mocap), the friction from 0.035-0.064 to 0.006, the backbone spring from
+  25 % to 4 %. Mocap alone helps the backbone spring, but not the friction or the pre-tension.
+- **Cable stiffness stays 13-25 % off with every sensor set, and its intervals do not cover the error**:
+  the twin's robots split their compliance around the friction element (phi 0.3-0.7) and spread the
+  stiffness per cable, the identification model fixes phi = 0.5 and has one stiffness per section. The
+  error is model mismatch, not noise - the kind a 95 % interval cannot show (chi^2/N of 1.6-4 with load
+  cells is the hint). The robust design below therefore keeps a wide cable-stiffness range.
+- `--study` also writes `reports/sysid/uncertainty_identified.json` (estimate +- 2 half-widths, envelope over
+  the fitted robots) in the format `uncertainty.UncertaintySet.from_json` reads: on the real robot (one
+  robot) that file narrows the training ranges of 6.5 to what the K22 actually is
+  (`train_vertical_pipe.py --uncertainty-json`, `benchmark_safety.py --uncertainty-json`).
+
+### 6.3 Pre-tension: the design number (`pretension_study.py`)
+
+With one motor per antagonistic pair, while both cables of a pair are taut their tensions are
+T_a,b = T0 +- D/2 (D = k_c (G q - S u), the differential that bends the arm): the **shape does not depend on
+T0** at all (it is invisible to a camera or IMU, doc section 2), but the **band does**: both cables stay in
+[T_min, T_max] only while |D| <= D_max(T0) = min(2 (T0 - T_min), 2 (T_max - T0)), which is largest at
+**T0* = (T_min + T_max) / 2 = 5.25 N** (D_max 9.5 N). At today's 3 N, D_max is 5 N.
+
+`pretension_study.py` takes 300 poses the insertion needs (the S-curves over rig and random pipes, and
+30-100 % of them on the way there), solves the motor positions that hold each of them for every T0 and counts the poses with
+all 12 cables in the band (and the pose reached within 1 deg per section):
+
+| T0 (N) | 1 | 2 | 3 | 4 | 5 | **5.25** | 6 | 7 | 8 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| nominal robot | 6 % | 19 % | 42 % | 84 % | 94 % | **96 %** | 89 % | 49 % | 29 % | 0 % |
+| train-set robots | 6 % | 19 % | 41 % | 70 % | 91 % | **93 %** | 85 % | 56 % | 29 % | 0 % |
+
+![pre-tension study](media/stage6_pretension.png)
+
+So most of the violations of the nominal policy are not its fault: at 3 N, 58 % of the poses it must hold
+cannot be held with every cable inside the band, whatever the controller. Raising the pre-tension to
+5.25 N makes 96 % of them feasible - the single most effective change, and one the K22 can make with its
+tensioners (a motorised pre-tension, P2 of the improvement document, would let it follow T0* as the
+cables creep).
+
+### 6.4 Tension safety filter (`safety_filter.py`)
+
+`TensionCBF` sits between any controller and the motors (every 20 ms step, all envs batched on the GPU):
+
+- tension prediction T(k+1) = T(k) + A du with the sensitivity A = diag(k_c) (P (I + K_a P)^-1 K_a S - S),
+  P = G H0^-1 G^T, from the cable law and the backbone + gravity stiffness H0 at the straight pose (doc
+  section 4; 4 % p95 error against the full static model over random states);
+- discrete-time CBF on both sides of the band, h(k+1) >= (1 - gamma) h(k), robustified by a margin for the
+  sensitivity error and for the tension estimate (load cell noise, or the model's error without load cells);
+- QP min ||du - du_ref||^2 over the 6 motor steps subject to the 24 band constraints and the motor box,
+  solved by batched dual FISTA (fixed iteration count, the same solution as OSQP to 1.8e-5); when the band
+  cannot be held, the least-violation step with a flag (infeasible).
+- tension estimate: `loadcell` (12 load cells on the nuts, 0.1 N noise; the robot side is bounded by the
+  worst-case capstan factor e^(+-0.3)), `loadcell_id` (the same with the identified friction per section + 0.03),
+  `model` (no load cells: the model's tensions from the encoders and the mocap shape), `oracle` (true
+  tensions, an upper bound).
+
+`tests/check_safety_filter.py` (CPU, all pass): QP = OSQP; safe references pass unchanged; the constraints
+hold on random states; sensitivity within 4 % (p95).
+
+### 6.5 Robust, adaptive and constrained RL (`train_vertical_pipe.py --robust`, `ppo_lag.py`, `rma.py`)
+
+Every run fine-tunes the motor policy of the cable stage (`ppo_cable_128`) on robots of the train set (a new
+robot every episode), 512 envs x 32 steps per update, 2M steps, 16-32 min each (`scripts/stage6_train_all.sh`):
+
+| run | what it adds | eval during training: success / steps outside the band (best safe checkpoint) |
+|---|---|---|
+| `dr_t3`, `dr_t525` | domain randomisation (train set), asymmetric critic that reads the 13 robot parameters (`--priv critic`) | 100 % / 56.0 % (3 N), 100 % / 30.0 % (5.25 N) |
+| `lag_t3`, `lag_t525` | + PPO-Lagrangian (`ppo_lag.py`): costs slack / over-tension / pipe force, limits 0.02 / 0.01 / 0.01 per step, one PID multiplier each (Stooke et al. 2020) | 98 % / 11.4 % (3 N, still falling), 100 % / 11.2 % (5.25 N) |
+| `lag_t525_lc` | + the 12 load cells in the observation (`--obs-tension`) | 100 % / 8.8 % |
+| `teacher_t525` | the actor also reads the true robot parameters (`--priv both`) | 100 % / 11.3 % |
+| `rma_t525` | RMA phase 2 (`train_rma.py`): the teacher with parameters estimated from the last 50 observations, DAgger, 60 iterations, 15 min | student 99.5 % (teacher 99.5 %) |
+
+- **Domain randomisation alone gives robustness, not safety**: success stays at 98-100 %, the tension band
+  is violated as often as by the nominal policy (54-60 % of the steps at 3 N on train-set robots).
+- **The constraint is what removes the violations**: PPO-Lagrangian cuts them 5x at the same success. At
+  5.25 N it meets its cost limits (slack 0.021 / limit 0.02, over-tension 0.011 / 0.01, pipe 0.003-0.008 /
+  0.01; the slack multiplier settles at 0.73). At 3 N it cannot: the slack cost stays at 0.17 (limit 0.02),
+  its multiplier keeps rising (5.4 at 2M steps), and the policy **moves the load from the cables onto the
+  pipe**: it leans on the pipe wall in 25 steps per episode (the nominal policy: 1), the pipe force exceeds
+  2 N in 46 % of the episodes (p95 34 N, contact cost 0.11-0.13 / limit 0.01). With an infeasible set of
+  constraints, a Lagrangian method trades one violation for another - the pre-tension study (6.3) in action.
+- **Knowing the robot does not help the policy** (teacher 11.3 % vs 11.2 % without the parameters): the
+  shape feedback in its observation already closes the loop, the remaining violations are those its cost
+  budget allows. RMA reproduces its teacher (benchmark below) and its adaptation module shows what the motion
+  reveals about the robot - R^2 after 60 iterations: command latency 0.79, cable stiffness 0.45, pair
+  asymmetry 0.33, backbone damping 0.35, friction 0.19, backbone spring 0.07, **pre-tension 0.03**: the
+  pre-tension is invisible in the motion (6.3, doc section 2), only load cells see it (6.2).
+- Load cells in the observation help a little (8.8 % vs 11.2 %).
+
+A bug found on the way: the time-out bootstrap of the PPO update built the critic's input from the policy
+observation only, so any privileged critic failed at the first time-out (`5ac1023`); the first `dr_t525`
+run crashed at 1.2M steps and was re-run.
+
+
+### 6.6 Model-based shape control: fixed, PI, adaptive (`shape_control.py`, `play_shape.py`)
+
+Shape tracking without pipes (32 robots per cell, T0 = 5.25 N, 10 s, a 50 g mass hung on the tip at 5 s,
+`play_shape.py --payload-step`): the controllers give motor targets, the motors move towards them at their
+rate limit. `formula` = the lab's controller (rigid cables, the Qt GUI); `statics` = inverse statics of the
+nominal model (elastic cables, backbone, gravity); `+PI` = PI on the measured bends through the inverse
+sensitivity; `adaptive` = the same on a model whose (k_c, T0, k_j) are adapted online by a damped Gauss-Newton
+step on the bends (and the 12 load cells for `adaptive+loadcell`); `+cbf` = the tension filter (identified
+friction) underneath. Section-bend RMS error / steps outside the band:
+
+| controller | S-curve, nominal robot | S-curve, train-set robots | circle 0.25 Hz, nominal robot |
+|---|---|---|---|
+| `formula` | 2.96 deg / 9.7 % | 3.20 deg / 32.9 % | 23.0 deg / 37.2 % |
+| `statics` | **2.83 deg** / 14.2 % | **3.07 deg** / 34.5 % | 23.7 deg / 40.3 % |
+| `statics+PI` | 3.49 deg / 13.5 % | 3.64 deg / 39.2 % | 32.5 deg / 60.0 % |
+| `adaptive` | 3.42 deg / 13.4 % | 3.70 deg / 40.3 % | 32.8 deg / 61.0 % |
+| `adaptive+loadcell` | 3.45 deg / 13.4 % | 3.64 deg / 39.2 % | 32.5 deg / 60.6 % |
+| `statics+PI+cbf` | 5.48 deg / **0.0 %** | 15.2 deg / 5.2 % | 30.3 deg / **0.0 %** |
+
+An honest negative result: here the feedback and adaptive layers do **not** improve on inverse statics. What
+was checked: the payload is not the cause (without it, `statics` 2.89 deg, `statics+PI` 3.66 deg, max 16 deg;
+8 robots), and in the first 2 s alone (forming the S-curve, 4 robots, T0 = 3 N) the PI and the adaptation
+did help (bend RMS 1.46 -> 1.11 / 1.07 deg). The circle is beyond the drive: section 1 needs ~31 mm/s of nut
+speed at 0.25 Hz, its screw gives 15 mm/s, so every controller is 20-30 deg off and the PI, integrating the
+lag, makes it worse. The likely cause in the S-curve is the same - integrator wind-up while the motors are
+rate-limited (forming in 2 s, straightening in 2 s) - not yet verified. The filter again holds the band, at
+the cost of tracking on uncertain robots. To do: anti-windup against the motor rate limit, references inside
+the drive's bandwidth, steady-state and transient errors reported separately.
+
+### 6.7 K22-SafeBench (`benchmark_safety.py`, `plot_safebench.py`)
+
+Every controller on the same robots and pipes (seed 9000; the k-th episode of env i is the same robot / pipe
+for all controllers), 100 episodes per pipe mode (rig, random) and cell, Wilson 95 % intervals in
+`reports/safebench/*/table.md` (re-runs agree within 0.5 %). Robots: the nominal one, the train set (what the
+RL runs were trained on) and the wider ood set. `+cbf` = `TensionCBF` under the policy with the load cells and the
+worst-case friction, `+cbf_id` with the identified friction, `+cbf_model` without load cells, `+cbf_oracle` with
+the true tensions. Success / steps with a cable outside [0.5, 10] N:
+
+**T0 = 3 N (today)**
+
+| controller | nominal: success / outside band | train: success / outside band | ood: success / outside band |
+|---|---|---|---|
+| `ppo_nominal` | 98.5 % / 43.1 % | 98.5 % / 60.1 % | 98.0 % / 61.6 % |
+| `ppo_nominal+cbf` | 94.0 % / 0.1 % | 71.5 % / 4.6 % | 48.5 % / 17.5 % |
+| `dr_t3` | 98.0 % / 42.7 % | 98.0 % / 54.2 % | 98.0 % / 60.1 % |
+| `lag_t3` | 94.5 % / 4.1 % | 94.5 % / 11.3 % | 93.5 % / 19.5 % |
+| `lag_t3+cbf` | 91.5 % / 0.0 % | 70.0 % / 3.6 % | 47.0 % / 14.8 % |
+
+**T0 = 5.25 N (the optimum of 6.3)**
+
+| controller | nominal: success / outside band | train: success / outside band | ood: success / outside band |
+|---|---|---|---|
+| `ppo_nominal` | 98.0 % / 5.8 % | 98.0 % / 33.8 % | 97.5 % / 62.8 % |
+| `ppo_nominal+cbf` | 94.0 % / 0.0 % | 57.0 % / 2.2 % | 30.5 % / 27.7 % |
+| `ppo_nominal+cbf_id` | 98.0 % / 0.0 % | 70.0 % / 2.3 % | 42.0 % / 26.5 % |
+| `dr_t525` | 98.0 % / 5.2 % | 98.0 % / 31.4 % | 98.0 % / 60.7 % |
+| `lag_t525` | 98.0 % / 0.2 % | 98.0 % / 13.4 % | 98.0 % / 51.2 % |
+| `lag_t525_lc` | 98.0 % / 0.3 % | 97.5 % / 10.1 % | 97.5 % / 47.0 % |
+| `teacher_t525` | 98.5 % / 0.3 % | 98.0 % / 15.0 % | 98.5 % / 52.2 % |
+| `rma_t525` | 99.0 % / 0.3 % | 98.0 % / 14.7 % | 98.5 % / 52.5 % |
+| `lag_t525+cbf` | 97.0 % / 0.0 % | 56.0 % / 1.7 % | 29.5 % / 26.8 % |
+| `lag_t525+cbf_id` | 98.0 % / 0.0 % | 72.0 % / 2.3 % | 43.5 % / 24.1 % |
+| `lag_t525+cbf_model` | 98.0 % / 0.0 % | 97.5 % / 10.1 % | 88.0 % / 47.5 % |
+| `lag_t525+cbf_oracle` | 98.0 % / 0.0 % | 97.0 % / 2.7 % | 75.0 % / 29.3 % |
+| `rma_t525+cbf` | 96.0 % / 0.0 % | 56.5 % / 1.8 % | 28.5 % / 26.9 % |
+| `rma_t525+cbf_id` | 99.0 % / 0.0 % | 70.0 % / 2.2 % | 40.0 % / 24.5 % |
+
+![success vs safety at 3 N and 5.25 N](media/stage6_pareto.png)
+
+What the numbers say:
+
+1. **The pre-tension is the biggest lever.** The *same* nominal policy, untouched, goes from 43.1 % to 5.8 % of
+   the steps outside the band on the nominal robot when T0 goes from 3 N to 5.25 N (60.1 -> 33.8 % on
+   train-set robots), at the same success. At 5.25 N slack and over-tension come in equal shares, as T0* predicts.
+2. **Constrained RL at the right pre-tension gets both.** `lag_t525`: 98.0 % success with 0.2 % of the steps
+   outside the band on the nominal robot, 13.4 % on train-set robots (the nominal policy: 33.8 %), no filter.
+   At 3 N the same method pays with success (94.5 %) and with the pipe (it leans on it, 6.5).
+3. **The filter makes the nominal robot exactly safe**: 0.0 % for every policy behind it; with the identified
+   friction it costs no success at all (98.0 %, `lag_t525+cbf_id`). On uncertain robots it holds the band
+   (1.7-2.3 %) but costs success (56-72 %), because a load cell at the nut cannot tell how much of the tension
+   reaches the arm while the cable sticks in its sheath (e^(+-mu theta)): the worst-case friction bound blocks
+   most bends of robots with a high pre-tension (success 92.5 % for robots with T0 3.2-4.2 N, 0 % for 5.9-7.3 N,
+   `plot_safebench.py --by t0:train`), the identified friction recovers part of it (72 %), the true tensions
+   all of it (`+cbf_oracle`: 97.0 % / 2.7 %). Without load cells the filter does not see the robot's real
+   tensions and lets the violations through (`+cbf_model`: 10.1 %).
+
+   ![filter success and violations per robot pre-tension](media/stage6_cbf_by_t0.png)
+
+4. **Robustness is not safety.** Domain randomisation and RMA keep success at 98-99 % on every robot set, but
+   do not lower the violations; knowing the robot's parameters (teacher, RMA) does not either.
+5. **Outside the design range (ood) nothing is safe**: robots with pre-tensions up to 8.75 N have no S-curve
+   with every cable in the band - even the oracle filter keeps 29 % of the steps outside it, at 75 % success.
+   That is a hardware problem (re-tension the robot), not a control one.
+
+Stress tests on train-set robots (`--stress`: a 2 N push on the tip for 0.2 s at a random step, the cable
+stiffness halved = creep, the backlash of one motor x3):
+
+| controller (train robots), T0 = 3 N | push | creep | backlash |
+|---|---|---|---|
+| `ppo_nominal` | 79.0 % / 69.3 % | 97.0 % / 56.3 % | 98.0 % / 60.0 % |
+| `ppo_nominal+cbf` | 55.0 % / 12.2 % | 73.0 % / 0.1 % | 70.5 % / 5.0 % |
+| `dr_t3` | 81.0 % / 64.9 % | 97.5 % / 49.5 % | 98.0 % / 55.5 % |
+| `lag_t3` | 76.5 % / 21.8 % | 90.5 % / 7.8 % | 94.0 % / 11.7 % |
+| `lag_t3+cbf` | 48.5 % / 10.5 % | 72.0 % / 0.0 % | 68.5 % / 3.7 % |
+
+| controller (train robots), T0 = 5.25 N | push | creep | backlash |
+|---|---|---|---|
+| `ppo_nominal` | 84.5 % / 41.0 % | 97.5 % / 27.1 % | 98.0 % / 34.0 % |
+| `dr_t525` | 87.5 % / 37.7 % | 97.5 % / 25.8 % | 98.0 % / 31.9 % |
+| `lag_t525` | 84.0 % / 20.5 % | 97.5 % / 10.8 % | 98.0 % / 13.5 % |
+| `rma_t525` | 84.5 % / 22.2 % | 97.5 % / 11.7 % | 98.0 % / 14.6 % |
+| `lag_t525+cbf` | 44.0 % / 6.9 % | 61.5 % / 0.3 % | 56.5 % / 2.2 % |
+| `lag_t525+cbf_id` | 55.5 % / 7.4 % | 73.5 % / 0.1 % | 71.5 % / 2.1 % |
+| `lag_t525+cbf_oracle` | 79.5 % / 8.8 % | 97.5 % / 0.2 % | 97.0 % / 2.6 % |
+
+A push costs the RL policies 10-20 points of success (rim hits) and the filtered ones more; the cable creep and
+the backlash cost the RL policies little (at most 4 points), and with exact tensions the filter keeps the band
+through the creep at full success (97.5 % / 0.2 %).
+
+### 6.8 The whole chain with the filter: language -> VLM -> student -> CBF -> motors
+
+`play_language.py --cable --robust train --pretension 5.25 [--safe loadcell_id]`: the Stage 5 pipeline (instruction
+-> Qwen3-VL-2B on the CPU -> pipe -> tip-camera search and pre-insertion approach -> image-based student on the
+motors), on train-set robots, 48 instructions each, with `robust_stages.RobustCableMultiPipeEnv` and the filter
+on every motor step (policy steps and the bend-mapped scripted motions alike):
+
+| | VLM picks the right pipe | whole task | insertion when the pipe is right | steps outside the band | T_max p95 |
+|---|---|---|---|---|---|
+| Stage 5 on the nominal robot, 3 N (cable stage, 100 instructions) | 88 % | 87 % | 98.9 % | - | - |
+| uncertain robots, 5.25 N | 85.4 % | 62.5 % | 73.2 % | 22.8 % | 14.9 N |
+| uncertain robots, 5.25 N, + tension CBF | 91.7 % | 54.2 % | 59.1 % | 19.0 % | 36.3 N |
+
+The weakest link of Stage 6, reported as it is: the image-based student and the scripted search were made for
+the nominal robot and do not transfer to uncertain ones (13-14 time-outs out of 48, the PPO policies of 6.5
+keep 98 %), and here the filter does not hold the band. The episodes that end in the pipes' walls push the
+cables beyond what a motor-step filter can undo (the filter acts on the motors; a contact loads the cables
+without any motor motion) - likely, not yet verified. Next: DAgger of the student on the train set with the
+filter in the loop, and a contact-aware margin in the CBF.
+
+### 6.9 What the real K22 needs (from the numbers above)
+
+What the simulation says the K22 needs, in the order of the gain (all numbers above):
+
+| change | why (number) |
+|---|---|
+| **pre-tension 5.25 N** instead of 3 N (tensioner screws, no new hardware) | violations of the unchanged policy 43 % -> 6 % of the steps; 96 % instead of 42 % of the insertion poses feasible with every cable in the band |
+| **12 load cells on the nuts** (P0.1) | the pre-tension and the friction are identifiable only with them (T0 error 23 % -> 3-10 %, mu theta 0.035 -> 0.006); the safety filter needs them to see the real tensions (without: 10 % of the steps outside the band on uncertain robots, with: 2 %) |
+| **the robot-side tension** (a second load cell at the cable termination, or a friction-state observer) | a nut-side load cell leaves the capstan factor e^(+-mu theta) open: the filter then holds the band at 72 % success, with the true tensions at 97 % |
+| **motorised pre-tension** (P2) | robots far from T0* cannot be made safe by any controller (ood: 29 % of the steps outside the band with exact tensions); identify T0 with the load cells, then re-tension to T0* - also after the cables creep |
+| **motion capture** (P0.2) | the shape feedback in the policy's observation; identifies the backbone spring (25 % -> 11 % error, 6 % with load cells) |
+
+```cmd
+%ISAAC% tests\check_robust_env.py                                  :: twin = CableModel without friction, statics, hysteresis, backlash
+python tests\check_safety_filter.py                               :: CBF QP vs OSQP, sensitivity (CPU)
+python pretension_study.py                                         :: reports\pretension%ISAAC% sysid_experiments.py --robots 8 --level train              :: data\sysid
+obot_train_*.npz (hidden parameters)
+python sysid.py "data\sysid
+obot_train_*.npz" --study --workers 12 :: reports\sysid\ + uncertainty_identified.json
+python plot_sysid.py
+bash scripts/stage6_train_all.sh                                   :: dr / lag / teacher / lag_lc runs + RMA (Git Bash)
+bash scripts/stage6_bench_all.sh                                   :: K22-SafeBench at 3 N and 5.25 N + stress tests
+%ISAAC% benchmark_safety.py --pretension 5.25 --policy lag_cbf_id=models\lag_t525est_safe_model.pt+cbf-loadcell_id --tag mine
+python plot_safebench.py reports\safebench\stage6_t3.json reports\safebench\stage6_t525_all.json --compare reports\safebench\pareto.png --roles ppo_nominal,lag,lag+cbf_id
+python plot_safebench.py reports\safebench\stage6_t525.json --by t0:train   :: success / violations per bin of the robot's pre-tension
+bash scripts/stage6_demo_all.sh                                    :: shape tracking, language with / without the CBF, clips
+%ISAAC% play_language.py --cable --robust train --pretension 5.25 --safe loadcell_id --episodes 48 --vlm-url http://127.0.0.1:8765/ground
+%ISAAC% record_safety_video.py --policy models\lag_t525est_safe_model.pt --pretension 5.25 --cbf --output videos\safety_after.mp4
+python make_showcase_video.py --stage6                             :: videos\stage6_safe_k22.mp4
+```
 
 ## Notes
 

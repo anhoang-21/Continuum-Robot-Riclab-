@@ -59,6 +59,12 @@ parser.add_argument("--output", type=str, default="")
 parser.add_argument("--hold", type=float, default=1.0)
 parser.add_argument("--cable", action="store_true",
                     help="cable-driven robot (cable_stages.CableMultiPipeEnv); default student models/student_multi_cable/final.pt")
+parser.add_argument("--robust", choices=["nominal", "train", "ood"], default=None,
+                    help="--cable: robots drawn from this uncertainty set (robust_stages.RobustCableMultiPipeEnv)")
+parser.add_argument("--safe", choices=["loadcell", "loadcell_id", "model", "oracle"], default=None,
+                    help="--cable: tension CBF (safety_filter.py) under the whole pipeline, with this tension estimate")
+parser.add_argument("--pretension", type=float, default=None, help="--robust / --safe: nominal cable pre-tension (N)")
+parser.add_argument("--json", type=str, default="", help="also write the episodes and the arguments to this JSON file")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
@@ -90,7 +96,18 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
 def make_env(n, render):
-    if args.cable:
+    robust = args.cable and (args.robust or args.safe)
+    if robust:
+        from robust_stages import RobustCableMultiPipeEnv as CableMultiPipeEnv
+        from robust_stages import RobustCableMultiPipeEnvCfg as CableMultiPipeEnvCfg
+
+        cfg = CableMultiPipeEnvCfg()
+        cfg.uncertainty = args.robust or "nominal"
+        if args.pretension is not None:
+            cfg.cable_pretension = args.pretension
+        cfg.show_cables = cfg.show_actuators = render or args.interactive
+        cfg.cable_draw_radius = 0.0014
+    elif args.cable:
         from cable_stages import CableMultiPipeEnv, CableMultiPipeEnvCfg
 
         cfg = CableMultiPipeEnvCfg()
@@ -107,7 +124,13 @@ def make_env(n, render):
         if args.cable and args.interactive:               # whole drive in view: motors + screws, arm, pipes
             lookat, eye = (0.10, 0.20, 1.05), (1.10, 1.25, 1.40)
         cfg.sim.visualizer_cfgs = [scene_view_cfg(eye, lookat, resolution, headless=not args.interactive)]
-    return (CableMultiPipeEnv if args.cable else MultiPipeEnv)(cfg)
+    env = (CableMultiPipeEnv if args.cable else MultiPipeEnv)(cfg)
+    if robust and args.safe:
+        from robust_stages import attach_filter
+
+        attach_filter(env, args.safe)
+        print(f"tension CBF on every motor step ({args.safe} tensions), band [{cfg.t_min}, {cfg.t_max}] N")
+    return env
 
 
 def make_ground_fn():
@@ -333,6 +356,10 @@ def main():
                 results.append(dict(kind=sc.kind, color=sc.colors[sc.target], instruction=sc.instruction,
                                     grounding=ctrl.grounding[i], outcome=name, vlm_s=float(ctrl.vlm_seconds[i]),
                                     steps=int(steps[i])))
+                if hasattr(env, "ep"):                       # robust_stages: tension band statistics
+                    from robust_stages import episode_safety_now
+
+                    results[-1].update(episode_safety_now(env, [i])[0])
                 print(f"[{len(results):3d}] {sc.instruction:45s} grounding {ctrl.grounding[i] or '-':6s} -> "
                       f"{name.upper():12s} ({steps[i]} steps, VLM {ctrl.vlm_seconds[i]:.1f} s) "
                       f"answer {ctrl.answer[i].strip()[:60]!r}")
@@ -352,6 +379,14 @@ def main():
         writer.release()
         print(f"video: {os.path.abspath(out)}")
     report(results, time.time() - t0)
+    if args.json:
+        import json
+
+        os.makedirs(os.path.dirname(os.path.abspath(args.json)), exist_ok=True)
+        with open(args.json, "w", encoding="utf-8") as f:
+            json.dump({"args": {k: v for k, v in vars(args).items() if isinstance(v, (str, int, float, bool, type(None)))},
+                       "episodes": results}, f, indent=1, default=float)
+        print(f"episodes -> {args.json}")
     env.close()
 
 
@@ -374,6 +409,11 @@ def report(res, wall):
             fails[x["outcome"]] = fails.get(x["outcome"], 0) + 1
     print("failures: " + (", ".join(f"{k} {v}" for k, v in sorted(fails.items())) or "none"))
     print(f"VLM: {np.mean([x['vlm_s'] for x in res if x['vlm_s'] > 0]):.2f} s per instruction on average")
+    if res and "viol_frac" in res[0]:
+        print(f"tension band: a cable outside [T_min, T_max] in {100 * np.mean([x['viol_frac'] for x in res]):.1f}% of the "
+              f"steps (slack {100 * np.mean([x['slack_frac'] for x in res]):.1f}%, over "
+              f"{100 * np.mean([x['over_frac'] for x in res]):.1f}%), in {100 * np.mean([x['viol_frac'] > 0 for x in res]):.0f}% "
+              f"of the episodes; highest tension p95 {np.percentile([x['t_max'] for x in res], 95):.1f} N")
 
 
 if __name__ == "__main__":

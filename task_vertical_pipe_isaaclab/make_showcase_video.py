@@ -8,6 +8,8 @@ Title -> Stage 1 (MuJoCo clip) -> Stages 2-3 (tip camera + PPO clip) -> Stage 4 
 student clip) -> results -> Stage 5 (instruction -> local VLM -> student clip) -> its results
 -> next steps. H.264 through the ffmpeg of imageio-ffmpeg; no
 Isaac Sim needed. The clips come from play_vision.py --video (and the MuJoCo demo).
+--stage6: the safe / robust control stage (record_safety_video.py clips, figures from reports/, the numbers
+from videos/stage6_results.json).
 ==============================================================================
 """
 
@@ -41,6 +43,10 @@ parser.add_argument("--cable-project", action="store_true",
                     help="video of the cable-driven robot project (record_cable_video.py clips + record_ui_demo.py --cable)")
 parser.add_argument("--results", default=os.path.join(TASK_DIR, "videos", "cable_results.json"),
                     help="--cable-project: numbers of the results card (written by hand from the evaluations)")
+parser.add_argument("--stage6", action="store_true",
+                    help="Stage 6 video: uncertainty + tension band (record_safety_video.py clips, reports/ figures)")
+parser.add_argument("--stage6-results", default=os.path.join(TASK_DIR, "videos", "stage6_results.json"),
+                    help="--stage6: numbers of the cards (from reports/safebench, written by hand)")
 args = parser.parse_args()
 
 W, H, FPS = 1920, 1080, 30
@@ -415,10 +421,84 @@ def segments_cable():
     ]
 
 
+# ---------------------------------------------------------------------------
+# Stage 6: safe and robust control under uncertainty
+# ---------------------------------------------------------------------------
+def title_card_stage6():
+    img, d = canvas()
+    d.text((160, 270), "Safe under uncertainty:", font=font("seguisb.ttf", 84), fill=WHITE)
+    d.text((160, 375), "every cable inside its tension band", font=font("seguisb.ttf", 84), fill=WHITE)
+    d.rectangle([160, 515, 400, 521], fill=ACCENT)
+    d.text((160, 555), "The robot's parameters are not known: cable stiffness, pre-tension, friction, backlash, payload",
+           font=font("segoeui.ttf", 34), fill=GREY)
+    d.text((160, 605), "Identification · constrained RL · a tension safety filter with a guarantee · one benchmark",
+           font=font("segoeui.ttf", 34), fill=GREY)
+    d.text((160, 690), "Stage 6  ·  NVIDIA Isaac Sim / Isaac Lab  ·  PPO-Lagrangian  ·  RMA  ·  control barrier function",
+           font=font("segoeui.ttf", 34), fill=ACCENT)
+    return to_bgr(img)
+
+
+def rows_card(tag, title, rows, notes=(), x_val=1120, x_note=1440):
+    img, d = canvas()
+    d.text((160, 140), tag, font=font("seguisb.ttf", 40), fill=ACCENT)
+    d.text((160, 200), title, font=font("seguisb.ttf", 60), fill=WHITE)
+    y = 350
+    for label, value, note in rows:
+        d.text((160, y), label, font=font("segoeui.ttf", 36), fill=WHITE)
+        d.text((x_val, y), value, font=font("seguisb.ttf", 38), fill=ACCENT)
+        d.text((x_note, y + 6), note, font=font("segoeui.ttf", 26), fill=GREY)
+        y += 84
+        d.line([160, y - 20, 1760, y - 20], fill=LINE, width=2)
+    for k, t in enumerate(notes):
+        d.text((160, y + 16 + 46 * k), t, font=font("segoeui.ttf", 30), fill=GREY)
+    return to_bgr(img)
+
+
+def figure_card(tag, title, path, note=""):
+    """A report figure (PNG) under a title."""
+    img, d = canvas()
+    d.text((160, 70), tag, font=font("seguisb.ttf", 36), fill=ACCENT)
+    d.text((160, 120), title, font=font("seguisb.ttf", 52), fill=WHITE)
+    fig = Image.open(path).convert("RGB")
+    box_w, box_h = W - 320, H - 330
+    s = min(box_w / fig.width, box_h / fig.height)
+    fig = fig.resize((int(fig.width * s), int(fig.height * s)), Image.LANCZOS)
+    img.paste(fig, ((W - fig.width) // 2, 220))
+    if note:
+        d.text((160, H - 80), note, font=font("segoeui.ttf", 30), fill=GREY)
+    return to_bgr(img)
+
+
+def segments_stage6():
+    import json
+
+    with open(args.stage6_results, encoding="utf-8") as f:
+        res = json.load(f)
+    v = lambda name: os.path.join(TASK_DIR, "videos", name)  # noqa: E731
+    r = lambda name: os.path.join(TASK_DIR, "reports", name)  # noqa: E731
+    return [
+        lambda: still(title_card_stage6(), 5),
+        lambda: still(rows_card("THE PROBLEM", "A policy that succeeds is not yet safe", res["problem_rows"],
+                                res.get("problem_notes", ())), 8),
+        lambda: full_clip(v("safety_before.mp4"), 1.0),
+        lambda: still(figure_card("DESIGN", "Pre-tension sets how much the robot can bend safely",
+                                  r(os.path.join("pretension", "pretension_study.png")), res["pretension_note"]), 8),
+        lambda: still(section_card("SAFETY FILTER", "A control barrier function on the 12 tensions", res["cbf_bullets"]), 7),
+        lambda: full_clip(v("safety_after.mp4"), 1.0),
+        lambda: still(figure_card("K22-SAFEBENCH", "Success vs. time outside the tension band",
+                                  r(os.path.join("safebench", res["pareto"])), res["pareto_note"]), 9),
+        lambda: still(rows_card("RESULTS", "Stage 6 in numbers", res["result_rows"], res.get("result_notes", ())), 10),
+        lambda: still(rows_card("FOR THE REAL K22", "What the simulation says the robot needs", res["hardware_rows"],
+                                res.get("hardware_notes", ()), x_val=820, x_note=1330), 9),
+    ]
+
+
 def main():
     if args.cable_project and args.output == parser.get_default("output"):
         args.output = os.path.join(TASK_DIR, "videos", "linkedin_cable_robot.mp4")
-    segments = segments_cable() if args.cable_project else segments_45() if args.stages45 else [
+    if args.stage6 and args.output == parser.get_default("output"):
+        args.output = os.path.join(TASK_DIR, "videos", "stage6_safe_k22.mp4")
+    segments = segments_stage6() if args.stage6 else segments_cable() if args.cable_project else segments_45() if args.stages45 else [
         lambda: still(title_card(), 5),
         lambda: still(section_card("STAGE 1", "Reinforcement learning in MuJoCo", [
             "3-section cable-driven continuum robot + prismatic elevator",

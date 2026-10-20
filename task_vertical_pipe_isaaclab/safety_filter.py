@@ -29,7 +29,11 @@ The pose q is what a shape sensor gives: the constant-curvature joints of the me
 Tension estimate (`source`):
     "loadcell": T_lo = T_n e^(-mu_bar) - delta, T_hi = T_n e^(+mu_bar) + delta for taut cables (the capstan
                 friction makes the robot side differ from the nut side by up to e^(mu_bar)); a cable the
-                load cell reads slack gets min(T_virt, 0) - delta (how far it is from taut)
+                load cell reads slack gets min(T_virt, 0) - delta (how far it is from taut). mu_bar is the
+                worst case of the uncertainty set (0.3): at 7.5 N read, T_hi is already 10.4 N.
+    "loadcell_id": the same with the robot's identified friction instead of the worst case: mu per section
+                (what sysid.py identifies, error ~0.006 with load cells) + mu_margin for the spread of the
+                cables of a section. (Simulation: the robot's true per-section mean stands in for the fit.)
     "model":    T_virt +- (delta + rel_k |T_virt - T0|)       (no load cells: identified-model error)
     "oracle":   the simulator's true robot / nut side tensions (an upper bound of what a filter can do)
 Robust margin m_c = rho_A sum_m |A_cm| u_rate_m (relative error rho_A of the sensitivity, e.g. the
@@ -55,10 +59,10 @@ class TensionCBF:
     def __init__(self, env, source: str = "loadcell", gamma: float = 0.2, t_min: float | None = None,
                  t_max: float | None = None, mu_bar: float = 0.3, delta: float = 0.3, rel_k: float = 0.3,
                  rho_A: float = 0.25, rho: float = 1e3, iters: int = 150, k_c: float = CB.CABLE_STIFFNESS,
-                 t0: float | None = None, k_j: float = CB.BACKBONE_STIFFNESS):
-        if source not in ("loadcell", "model", "oracle"):
-            raise ValueError(f"source must be loadcell / model / oracle, got {source!r}")
-        self.env, self.source = env, source
+                 t0: float | None = None, k_j: float = CB.BACKBONE_STIFFNESS, mu_margin: float = 0.03):
+        if source not in ("loadcell", "loadcell_id", "model", "oracle"):
+            raise ValueError(f"source must be loadcell / loadcell_id / model / oracle, got {source!r}")
+        self.env, self.source, self.mu_margin = env, source, mu_margin
         dev, f64 = env.device, torch.float64
         self.device = dev
         self.gamma, self.mu_bar, self.delta, self.rel_k, self.rho_A, self.rho, self.iters = (
@@ -121,8 +125,18 @@ class TensionCBF:
             return T_virt - err, T_virt + err
         T = env.ucm.T_n + env.tension_noise[:, None] * torch.randn_like(env.ucm.T_n)   # load cells
         taut = T > 0.2
-        lo = torch.where(taut, T * math.exp(-self.mu_bar), torch.clamp(T_virt, max=0.0)) - self.delta
-        hi = torch.where(taut, T * math.exp(self.mu_bar), torch.clamp(T_virt, min=0.0)) + self.delta
+        if self.source == "loadcell_id":
+            mu_c = torch.log(env.ucm.lam_hi).to(torch.float64)                    # (N, 12) the robot's mu theta
+            sec = torch.as_tensor(CB.CABLE_SECTION, device=self.device)
+            mu = torch.zeros_like(mu_c)
+            for s in range(3):
+                mu[:, sec == s] = mu_c[:, sec == s].mean(dim=1, keepdim=True)
+            mu = mu + self.mu_margin
+            up, down = torch.exp(mu), torch.exp(-mu)
+        else:
+            up, down = math.exp(self.mu_bar), math.exp(-self.mu_bar)
+        lo = torch.where(taut, T * down, torch.clamp(T_virt, max=0.0)) - self.delta
+        hi = torch.where(taut, T * up, torch.clamp(T_virt, min=0.0)) + self.delta
         return lo, hi
 
     # ------------------------------------------------------------------
