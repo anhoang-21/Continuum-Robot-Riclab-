@@ -58,6 +58,8 @@ parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--ppo-device", type=str, default="cpu",
                     help="PPO device (the MuJoCo trainer's --device, cpu). The PhysX device is --device")
 parser.add_argument("--eval-freq", type=int, default=50_000, help="Evaluation every N steps (0 = off)")
+parser.add_argument("--eval-episodes", type=int, default=20,
+                    help="Deterministic episodes per evaluation (with many envs more cost no extra time)")
 parser.add_argument("--checkpoint-freq", type=int, default=200_000, help="Checkpoint every N steps")
 parser.add_argument("--stop-at", type=int, default=0,
                     help="Stop after this many steps; the learning-rate schedule still spans --timesteps (0 = off)")
@@ -67,11 +69,33 @@ parser.add_argument("--cable", action="store_true",
 parser.add_argument("--action-mode", choices=["motor", "bend"], default="motor",
                     help="--cable: motor = the policy drives the 6 motors, bend = bend rates + the lab's cable formula")
 parser.add_argument("--no-gravity", action="store_true", help="--cable: no gravity on the arm")
+# Stage 6: uncertainty, safety constraints (robust_env.py, ppo_lag.py)
+parser.add_argument("--robust", choices=["nominal", "train", "ood"], default=None,
+                    help="cable-driven robot with per-env physical parameters drawn from this uncertainty set "
+                         "(robust_env.py; implies --cable)")
+parser.add_argument("--uncertainty-json", type=str, default="", help="--robust: identified ranges (sysid.py)")
+parser.add_argument("--constrained", action="store_true",
+                    help="PPO-Lagrangian (ppo_lag.py) on the tension / contact costs of robust_env.py")
+parser.add_argument("--cost-limits", type=str, default="0.02,0.01,0.01",
+                    help="--constrained: allowed mean per-step cost of slack,over,contact")
+parser.add_argument("--constrain", type=str, default="slack,over,contact", help="--constrained: which costs")
+parser.add_argument("--pid", type=str, default="1.0,0.1,0.0", help="--constrained: K_p,K_i,K_d of the multipliers")
+parser.add_argument("--t-min", type=float, default=0.5, help="--robust: slack threshold of the cable tension (N)")
+parser.add_argument("--t-max", type=float, default=10.0, help="--robust: tension limit (N)")
+parser.add_argument("--f-max", type=float, default=2.0, help="--robust: limit of the robot's force on the pipe (N)")
+parser.add_argument("--pretension", type=float, default=None,
+                    help="--robust: nominal cable pre-tension T0 (N) (pre-tension design study)")
+parser.add_argument("--obs-tension", action="store_true", help="--robust: the 12 load-cell tensions in the observation")
+parser.add_argument("--priv", choices=["none", "critic", "both"], default="none",
+                    help="--robust: normalised physical parameters as input of the critic (asymmetric) or of "
+                         "actor and critic (privileged teacher for train_rma.py)")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")      # PhysX GPU pipeline (the CPU pipeline is not supported, see README)
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
     sys.argv.append("--/app/vulkan=false")
 args, _ = parser.parse_known_args()
+if args.robust:
+    args.cable = True
 app = AppLauncher(launcher_args(args, gui=args.viewer, cameras=False)).app
 
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
@@ -79,7 +103,39 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 from agent_cfg import N_STEPS, make_agent_cfg, num_iterations  # noqa: E402
 from pipe_runner import PipeRunner  # noqa: E402
 from cable_env import CableVerticalPipeEnv, CableVerticalPipeEnvCfg  # noqa: E402
+from robust_env import RobustCableEnv, RobustCableEnvCfg  # noqa: E402
 from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg, scene_view_cfg  # noqa: E402
+
+
+def floats(text):
+    return tuple(float(v) for v in text.split(","))
+
+
+def widen_checkpoint(path, runner, out_path):
+    """
+    A checkpoint whose actor / critic read fewer inputs than this run's (e.g. the 33-D task observation, now
+    + 12 load cells or + 13 privileged parameters): the first layers get zero columns for the new inputs, so
+    the run starts from exactly the old policy. Returns the path of the widened checkpoint (or `path`).
+    """
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    changed = False
+    for key, model in (("actor_state_dict", runner.alg.actor), ("critic_state_dict", runner.alg.critic)):
+        sd = ckpt[key]
+        want = model.state_dict()["mlp.0.weight"]
+        have = sd["mlp.0.weight"]
+        if have.shape[1] < want.shape[1]:
+            w = torch.zeros(have.shape[0], want.shape[1], dtype=have.dtype)
+            w[:, :have.shape[1]] = have
+            sd["mlp.0.weight"] = w
+            for k in [k for k in sd if "normalizer" in k]:
+                sd.pop(k)
+            changed = True
+    if not changed:
+        return path
+    ckpt.pop("optimizer_state_dict", None)
+    torch.save(ckpt, out_path)
+    print(f"  widened the first layers of {path} to this run's inputs (new inputs start with zero weight)")
+    return out_path
 
 
 def env_modes(pipe_mode):
@@ -99,10 +155,18 @@ def main():
     os.makedirs(models_dir, exist_ok=True)
     os.makedirs(logs_dir, exist_ok=True)
 
-    cfg = CableVerticalPipeEnvCfg() if args.cable else VerticalPipeEnvCfg()
+    cfg = RobustCableEnvCfg() if args.robust else (CableVerticalPipeEnvCfg() if args.cable else VerticalPipeEnvCfg())
     if args.cable:
         cfg.action_mode = args.action_mode
         cfg.gravity = not args.no_gravity
+    if args.robust:
+        cfg.uncertainty = args.robust
+        cfg.uncertainty_json = args.uncertainty_json
+        cfg.t_min, cfg.t_max, cfg.f_max = args.t_min, args.t_max, args.f_max
+        cfg.obs_tension = args.obs_tension
+        cfg.priv_obs = args.priv != "none"
+        if args.pretension is not None:
+            cfg.cable_pretension = args.pretension
     cfg.scene.num_envs = args.n_envs
     cfg.pipe_modes = env_modes(args.pipe_mode)
     cfg.max_episode_steps = args.max_episode_steps
@@ -131,15 +195,38 @@ def main():
     print(f"  Logs   -> {logs_dir}   (tensorboard --logdir {os.path.join(TASK_DIR, 'logs')})")
     print("=" * 75)
 
-    env = RslRlVecEnvWrapper(CableVerticalPipeEnv(cfg) if args.cable else VerticalPipeEnv(cfg))
+    if args.robust:
+        print(f"  Uncertainty     : {args.robust}{' + ' + args.uncertainty_json if args.uncertainty_json else ''} | "
+              f"tension band [{args.t_min}, {args.t_max}] N, pipe force <= {args.f_max} N"
+              + (f" | pre-tension {args.pretension} N" if args.pretension is not None else ""))
+        print(f"  Observation     : 33{' + 12 load cells' if args.obs_tension else ''}"
+              f"{' | privileged parameters -> ' + args.priv if args.priv != 'none' else ''}")
+        if args.constrained:
+            print(f"  Constraints     : PPO-Lagrangian on {args.constrain}, limits {args.cost_limits} "
+                  f"(per step), PID {args.pid}")
+        print("=" * 75)
+    env_cls = RobustCableEnv if args.robust else (CableVerticalPipeEnv if args.cable else VerticalPipeEnv)
+    env = RslRlVecEnvWrapper(env_cls(cfg))
     agent_cfg = make_agent_cfg(args.n_envs, args.timesteps, gamma=args.gamma, seed=args.seed, n_steps=n_steps)
+    if args.priv in ("critic", "both"):
+        agent_cfg["obs_groups"] = {"actor": ["policy", "priv"] if args.priv == "both" else ["policy"],
+                                   "critic": ["policy", "priv"]}
+    if args.constrained:
+        names = ("slack", "over", "contact")
+        wanted = args.constrain.split(",")
+        agent_cfg["algorithm"].update({
+            "class_name": "ppo_lag:SB3PPOLag", "cost_limits": floats(args.cost_limits),
+            "pid": floats(args.pid), "constrain": tuple(n in wanted for n in names),
+            "cost_groups": tuple(agent_cfg["obs_groups"]["critic"]),
+        })
     runner = PipeRunner(env, agent_cfg, log_dir=logs_dir, device=args.ppo_device, models_dir=models_dir,
-                        eval_freq=args.eval_freq, n_eval_episodes=20, checkpoint_freq=args.checkpoint_freq)
+                        eval_freq=args.eval_freq, n_eval_episodes=args.eval_episodes, checkpoint_freq=args.checkpoint_freq)
     runner.add_git_repo_to_log(__file__)
     if args.resume:
         print(f"\nResuming from {args.resume}")
-        has_optimizer = "optimizer_state_dict" in torch.load(args.resume, map_location="cpu", weights_only=False)
-        runner.load(args.resume, load_cfg={"actor": True, "critic": True, "optimizer": has_optimizer, "iteration": False},
+        resume = widen_checkpoint(args.resume, runner, os.path.join(models_dir, "init_widened.pt"))
+        has_optimizer = "optimizer_state_dict" in torch.load(resume, map_location="cpu", weights_only=False)
+        runner.load(resume, load_cfg={"actor": True, "critic": True, "optimizer": has_optimizer, "iteration": False},
                     map_location=args.ppo_device)
         runner.alg.set_schedule(1e-4, 1e-5, args.timesteps)
 

@@ -32,6 +32,22 @@ from rsl_rl.utils import check_nan
 from train_viz import EpisodeRecorder, render_and_log_async
 
 OUTCOMES = ("success", "unstable", "rim_hit", "missed_pipe", "timeout")   # index = outcome code of the env
+# per-episode safety statistics of robust_env.py (done_info): fractions of the episode's steps, extremes
+SAFETY_KEYS = ("viol_frac", "slack_frac", "over_frac", "contact_viol_frac", "t_max", "t_min", "f_max",
+               "cost_slack", "cost_over", "cost_contact")
+
+
+def episode_safety(info: dict, ended) -> dict:
+    """done_info of robust_env.py -> safety statistics (lists) of the episodes `ended`."""
+    length = np.maximum(info["episode_length"][ended].cpu().numpy().astype(np.float64), 1.0)
+    get = lambda k: info[k][ended].cpu().numpy().astype(np.float64)  # noqa: E731
+    return {
+        "viol_frac": list(get("viol_steps") / length), "slack_frac": list(get("slack_steps") / length),
+        "over_frac": list(get("over_steps") / length), "contact_viol_frac": list(get("contact_viol_steps") / length),
+        "t_max": list(get("t_max")), "t_min": list(get("t_min")), "f_max": list(get("f_max")),
+        "cost_slack": list(get("cost_slack") / length), "cost_over": list(get("cost_over") / length),
+        "cost_contact": list(get("cost_contact") / length),
+    }
 
 
 class PipeRunner(OnPolicyRunner):
@@ -44,8 +60,11 @@ class PipeRunner(OnPolicyRunner):
         self.outcomes = deque(maxlen=stats_window)
         self.contact_steps = deque(maxlen=stats_window)
         self.success_len = deque(maxlen=stats_window)
+        self.safety = {k: deque(maxlen=stats_window) for k in SAFETY_KEYS}    # robust_env.py episodes only
+        self._last_safety = {}
         self.num_timesteps = 0
         self.best_mean_reward = -np.inf
+        self.best_safe_score = -np.inf
         self.eval_log = {"timesteps": [], "results": [], "ep_lengths": [], "successes": []}
         self._last_print = time.time()
 
@@ -64,6 +83,9 @@ class PipeRunner(OnPolicyRunner):
             self.contact_steps.append(c)
             if o == 0:
                 self.success_len.append(length)
+        if "viol_steps" in info:
+            for k, v in episode_safety(info, ended).items():
+                self.safety[k].extend(v)
 
     def _log_pipe_stats(self, it: int) -> None:
         if not self.outcomes:
@@ -76,6 +98,9 @@ class PipeRunner(OnPolicyRunner):
             writer.add_scalar("pipe/contact_steps_per_ep", float(np.mean(self.contact_steps)), self.num_timesteps)
             if self.success_len:
                 writer.add_scalar("pipe/success_ep_len", float(np.mean(self.success_len)), self.num_timesteps)
+            for k, v in self.safety.items():
+                if v:
+                    writer.add_scalar(f"safety/{k}", float(np.mean(v)), self.num_timesteps)
         if time.time() - self._last_print > 30:
             self._last_print = time.time()
             rates = " | ".join(f"{k}: {100 * self.outcomes.count(k) / n:5.1f}%"
@@ -94,6 +119,7 @@ class PipeRunner(OnPolicyRunner):
         cur_rew = torch.zeros(n)
         cur_len = torch.zeros(n)
         rewards, lengths, successes = [], [], []
+        safety = {k: [] for k in SAFETY_KEYS}
         # env buffers are created under inference mode during the rollouts, so everything stays in it
         with torch.inference_mode():
             snapshot = env.snapshot()
@@ -117,11 +143,17 @@ class PipeRunner(OnPolicyRunner):
                         rec.finish(outcome[rv])
                     else:
                         rec.add(int(cur_len[rv]))
-                for i in dones.nonzero().view(-1).cpu().tolist():
+                ended = dones.nonzero().view(-1).cpu()
+                info = extras["done_info"]
+                safe = episode_safety(info, ended.to(info["outcome"].device)) if "viol_steps" in info else None
+                for j, i in enumerate(ended.tolist()):
                     if counts[i] < targets[i]:
                         rewards.append(float(cur_rew[i]))
                         lengths.append(int(cur_len[i]))
                         successes.append(bool(outcome[i] == 0))
+                        if safe is not None:
+                            for k in SAFETY_KEYS:
+                                safety[k].append(safe[k][j])
                         counts[i] += 1
                     cur_rew[i] = 0.0
                     cur_len[i] = 0
@@ -129,6 +161,7 @@ class PipeRunner(OnPolicyRunner):
             env.restore(snapshot)
         self.alg.train_mode()
         self._last_recording = rec
+        self._last_safety = {k: np.array(v) for k, v in safety.items() if v}
         return np.array(rewards), np.array(lengths), np.array(successes)
 
     def _run_eval(self) -> None:
@@ -143,6 +176,8 @@ class PipeRunner(OnPolicyRunner):
             self.logger.writer.add_scalar("eval/mean_reward", mean_r, self.num_timesteps)
             self.logger.writer.add_scalar("eval/mean_ep_length", float(lengths.mean()), self.num_timesteps)
             self.logger.writer.add_scalar("eval/success_rate", float(successes.mean()), self.num_timesteps)
+            for k, v in self._last_safety.items():
+                self.logger.writer.add_scalar(f"eval/{k}", float(v.mean()), self.num_timesteps)
             np.savez(os.path.join(self.logger.log_dir, "evaluations.npz"),
                      **{k: np.array(v) for k, v in self.eval_log.items()})
         rec = getattr(self, "_last_recording", None)
@@ -156,8 +191,20 @@ class PipeRunner(OnPolicyRunner):
             if self.models_dir:
                 self.save(os.path.join(self.models_dir, "best_model.pt"))
             best = "  -> new best model"
+        safe_txt = ""
+        if self._last_safety:
+            viol = float(self._last_safety["viol_frac"].mean())
+            # the safe model: most successes, then fewest steps outside the tension band
+            score = float(successes.mean()) - viol
+            if score > self.best_safe_score:
+                self.best_safe_score = score
+                if self.models_dir:
+                    self.save(os.path.join(self.models_dir, "best_safe_model.pt"))
+                best += "  -> new best safe model"
+            safe_txt = (f", tension outside [T_min, T_max] in {100 * viol:.1f}% of the steps, "
+                        f"max tension {self._last_safety['t_max'].mean():.1f} N")
         print(f"Eval num_timesteps={self.num_timesteps}, episode_reward={mean_r:.2f} +/- {std_r:.2f}, "
-              f"success {100 * successes.mean():.0f}%, episode length {lengths.mean():.0f} "
+              f"success {100 * successes.mean():.0f}%, episode length {lengths.mean():.0f}{safe_txt} "
               f"({time.time() - t0:.0f} s){best}", flush=True)
 
     # ------------------------------------------------------------------
