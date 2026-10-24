@@ -51,6 +51,11 @@ parser.add_argument("--output", type=str, default="", help="MP4 path (default vi
 parser.add_argument("--slowdown", type=float, default=1.0, help=">1 plays slower than real time")
 parser.add_argument("--hold", type=float, default=1.2, help="seconds to hold the final pose of each episode")
 parser.add_argument("--no-meshes", action="store_true", help="show the collision cylinders instead of the CAD meshes")
+parser.add_argument("--actuation", choices=["joint", "cable"], default="joint",
+                    help="cable: tendon-driven robot (cable_env.py); the checkpoint must be trained with --actuation cable "
+                         "(default checkpoint models/ppo_vpipe_cable/best_model.pt)")
+parser.add_argument("--obs-tension", action="store_true", help="cable: the checkpoint observes the cable tensions (39-dim obs)")
+parser.add_argument("--draw-cables", action="store_true", help="cable: draw the 12 cables (brightness = tension)")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cuda:0")
 if not any(a.startswith("--/app/vulkan") for a in sys.argv):
@@ -67,6 +72,7 @@ from rsl_rl.models import MLPModel  # noqa: E402
 import constants as C  # noqa: E402
 from agent_cfg import make_agent_cfg  # noqa: E402
 from pipe_runner import OUTCOMES  # noqa: E402
+from cable_env import CableVerticalPipeEnv, CableVerticalPipeEnvCfg  # noqa: E402
 from vertical_pipe_env import VerticalPipeEnv, VerticalPipeEnvCfg  # noqa: E402
 
 FAILURE_TEXT = {"rim_hit": "HIT THE PIPE RIM", "missed_pipe": "MISSED THE PIPE", "unstable": "SIM UNSTABLE",
@@ -79,7 +85,8 @@ def find_checkpoint(path):
             if os.path.isfile(cand):
                 return cand
         return ""
-    for run, name in (("ppo_vpipe", "best_model.pt"), ("ppo_vpipe", "final_model.pt")):
+    run = "ppo_vpipe_cable" if args.actuation == "cable" else "ppo_vpipe"
+    for run, name in ((run, "best_model.pt"), (run, "final_model.pt")):
         cand = os.path.join(TASK_DIR, "models", run, name)
         if os.path.isfile(cand):
             return cand
@@ -91,7 +98,8 @@ def load_actor(path):
     actor_cfg = dict(make_agent_cfg(1, 1)["actor"])
     actor_cfg.pop("class_name")
     actor_cfg["distribution_cfg"] = dict(actor_cfg["distribution_cfg"])
-    dummy = TensorDict({"policy": torch.zeros(1, 33)}, batch_size=[1])
+    obs_dim = 33 + (6 if args.actuation == "cable" and args.obs_tension else 0)
+    dummy = TensorDict({"policy": torch.zeros(1, obs_dim)}, batch_size=[1])
     actor = MLPModel(dummy, {"actor": ["policy"], "critic": ["policy"]}, "actor", 7, **actor_cfg)
     state = torch.load(path, map_location="cpu", weights_only=False)
     actor.load_state_dict(state["actor_state_dict"])
@@ -100,7 +108,10 @@ def load_actor(path):
 
 
 def make_env(modes, num_envs, visual, render_mode=None):
-    cfg = VerticalPipeEnvCfg()
+    cfg = CableVerticalPipeEnvCfg() if args.actuation == "cable" else VerticalPipeEnvCfg()
+    if args.actuation == "cable":
+        cfg.obs_tension = args.obs_tension
+        cfg.draw_cables = args.draw_cables
     cfg.scene.num_envs = num_envs
     cfg.pipe_modes = tuple(modes)
     cfg.max_episode_steps = args.max_steps
@@ -112,7 +123,7 @@ def make_env(modes, num_envs, visual, render_mode=None):
     cfg.sim.device = args.device
     if args.video:
         cfg.viewer.resolution = (1280, 720)
-    return VerticalPipeEnv(cfg, render_mode=render_mode)
+    return (CableVerticalPipeEnv if args.actuation == "cable" else VerticalPipeEnv)(cfg, render_mode=render_mode)
 
 
 def act(actor, obs, env):

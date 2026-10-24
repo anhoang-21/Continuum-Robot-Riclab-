@@ -347,15 +347,9 @@ class VerticalPipeEnv(DirectRLEnv):
         """
         action = action.to(self.device)
         self._pre_physics_step(action)
-        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors()
         self._apply_action()
         self.scene.write_data_to_sim()
-        for _ in range(self.cfg.decimation):
-            self._sim_step_counter += 1
-            self.sim.step(render=False)
-            if self._sim_step_counter % self.cfg.sim.render_interval == 0 and is_rendering:
-                self.sim.render()
-        self.scene.update(dt=self.step_dt)
+        self._simulate()
 
         self.episode_length_buf += 1
         self.common_step_counter += 1
@@ -370,6 +364,16 @@ class VerticalPipeEnv(DirectRLEnv):
                     self.sim.render()
         self.obs_buf = self._get_observations()
         return self.obs_buf, self.reward_buf, self.reset_terminated, self.reset_time_outs, self.extras
+
+    def _simulate(self):
+        """The `decimation` physics steps of one env step (the cable env applies its cable forces in here)."""
+        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors()
+        for _ in range(self.cfg.decimation):
+            self._sim_step_counter += 1
+            self.sim.step(render=False)
+            if self._sim_step_counter % self.cfg.sim.render_interval == 0 and is_rendering:
+                self.sim.render()
+        self.scene.update(dt=self.step_dt)
 
     # False: finished envs keep their final pose until reset_envs() (viewer / video show the end of an episode)
     auto_reset = True
